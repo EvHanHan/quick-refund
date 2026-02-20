@@ -1,4 +1,4 @@
-# 1-click Navan refund Chrome Extension 
+# 1-click Navan refund chrome extension 
 ## Setup
 1. Download the latest release zip file
 2. Unzip it
