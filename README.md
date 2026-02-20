@@ -1,4 +1,4 @@
-# Orange to Navan Chrome Extension (MV3)
+# Quick-refund Navan Chrome Extension (MV3)
 
 Private unpacked Chrome extension that:
 1. Prompts Orange credentials at runtime.
