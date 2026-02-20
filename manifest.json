@@ -35,7 +35,7 @@
         "https://*.bouyguestelecom.fr/*",
         "https://*.free.fr/*"
       ],
-      "js": ["src/shared/providers.js", "src/shared/selectors.js", "src/content/orange.js"],
+      "js": ["src/shared/providers.js", "src/shared/selectors.js", "src/content/provider_flow.js"],
       "run_at": "document_idle"
     },
     {
