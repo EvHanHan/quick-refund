@@ -17,8 +17,8 @@ Private unpacked Chrome extension that:
 2. Enable **Developer mode**.
 3. Click **Load unpacked** and select this repo folder.
 4. Pin extension and open popup.
-5. Enter Orange credentials, choose **Home internet** or **Mobile internet**, then click **Start Flow**.
-6. If Orange shows a captcha, solve it in the Orange tab then click **Resume**.
+5. Enter your provider credentials, choose **Home internet** or **Mobile internet**, then click **Start Flow**.
+6. If the provider shows a captcha, solve it in the Orange tab then click **Resume**.
 7. Complete Google SSO in Navan when prompted, then click **Resume**.
 
 ## Notes
