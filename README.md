@@ -1,5 +1,20 @@
-# Quick-refund Navan Chrome Extension (MV3)
+# 1-click Navan refund Navan Chrome Extension 
+## Setup
+1. Download the latest release zip file
+2. Unzip it
+4. Open your chome and open your extensions 
+2. Enable **Developer mode**.
+3. Click **Load unpacked** and select the unzip file.
 
+## How to use? 
+1. Open the extension
+2. Enter your provider credentials, choose **Home internet** or **Mobile internet**, then click **Start Flow**.
+
+### How to handle exception
+4. If the provider shows a captcha, solve it in the webpage then comes back to click **Resume**.
+5. Complete Google SSO in Navan when prompted, then click **Resume**.
+
+## Technical flow 
 Private unpacked Chrome extension that:
 1. asks credentials about your mobile or internet provider
 2. Logs into the provider and navigates billing.
@@ -11,15 +26,6 @@ Private unpacked Chrome extension that:
 - Passwords are not written to storage and are held only in memory during a run.
 - Flow state is cleared after completion/failure or 15 minutes inactivity.
 - User manually performs final submit in Navan.
-
-## Local setup
-1. Open `chrome://extensions`.
-2. Enable **Developer mode**.
-3. Click **Load unpacked** and select this repo folder.
-4. Pin extension and open popup.
-5. Enter your provider credentials, choose **Home internet** or **Mobile internet**, then click **Start Flow**.
-6. If the provider shows a captcha, solve it in the Orange tab then click **Resume**.
-7. Complete Google SSO in Navan when prompted, then click **Resume**.
 
 ## Notes
 - Selectors are best-effort and should be hardened against your tenant-specific UI.
