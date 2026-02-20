@@ -38,6 +38,13 @@ async function handleProviderAction(action, payload) {
 }
 
 function checkProviderSession(provider) {
+  if (provider === "free_mobile_provider") {
+    const diagnostics = getFreeMobileAuthDiagnostics();
+    return {
+      authenticated: isProviderAuthenticated(provider),
+      diagnostics
+    };
+  }
   return {
     authenticated: isProviderAuthenticated(provider)
   };
@@ -52,8 +59,10 @@ function checkProviderBillingReady(provider) {
     };
   }
   if (provider === "free_mobile_provider") {
+    const diagnostics = getFreeMobileAuthDiagnostics();
     return {
-      ready: isProviderAuthenticated(provider)
+      ready: isProviderAuthenticated(provider),
+      diagnostics
     };
   }
 
@@ -92,7 +101,7 @@ async function authProvider(provider, payload) {
       if (isProviderAuthenticated(provider)) {
         return { authenticated: true, skippedLogin: true, captchaRequired: false };
       }
-      throw new Error("Could not locate Free Mobile username field");
+      throw new Error(`Could not locate Free Mobile username field | ${summarizeFreeMobileDiagnostics()}`);
     }
 
     if (payload.username) {
@@ -100,7 +109,7 @@ async function authProvider(provider, payload) {
     }
     const password = await waitForVisible(s.password, 8000);
     if (!password) {
-      throw new Error("Could not locate Free Mobile password field");
+      throw new Error(`Could not locate Free Mobile password field | ${summarizeFreeMobileDiagnostics()}`);
     }
     if (hasProvidedPassword) {
       setInputValue(password, providedPassword);
@@ -108,7 +117,7 @@ async function authProvider(provider, payload) {
 
     const submit = pick(s.submit);
     if (!submit) {
-      throw new Error("Could not locate Free Mobile login button");
+      throw new Error(`Could not locate Free Mobile login button | ${summarizeFreeMobileDiagnostics()}`);
     }
     if (!hasProvidedPassword && !hasInputValue(password)) {
       return { authenticated: false, manualLoginRequired: true, captchaRequired: false };
@@ -215,6 +224,21 @@ async function navigateBilling(provider, payload) {
     return { navigated: true, detailUrl: location.href };
   }
 
+  if (provider === "free_mobile_provider") {
+    if (!location.hostname.includes("mobile.free.fr")) {
+      throw new Error("Free Mobile tab is not on mobile.free.fr");
+    }
+    if (!isProviderAuthenticated(provider)) {
+      throw new Error("Free Mobile user is not authenticated");
+    }
+
+    const inAccountArea = /^\/account\/v2(?:\/|$)/.test(location.pathname);
+    if (inAccountArea) {
+      return { navigated: true, detailUrl: location.href };
+    }
+    return { navigated: true, detailUrl: "https://mobile.free.fr/account/v2" };
+  }
+
   // Generic provider path: navigate to a discoverable invoice page/link.
   const generic = window.__EXT_SELECTORS__.providerDefaults.billing.invoiceLinks;
   const invoiceEntry = await waitForVisible(generic, 8000);
@@ -234,6 +258,8 @@ async function downloadAndExtractBill(provider) {
   const beforeResources = new Set(performance.getEntriesByType("resource").map((entry) => entry.name));
   const downloadControl = provider === "free_provider"
     ? await findBestFreeInvoiceControl(billing.downloadButton, 12000)
+    : provider === "free_mobile_provider"
+      ? await findBestFreeMobileInvoiceControl(billing, 12000)
     : await waitForVisible(billing.downloadButton, 12000);
   if (!downloadControl) {
     throw new Error("Could not find provider PDF download button");
@@ -356,6 +382,10 @@ function deriveFileName(provider, url, contentType, contentDisposition) {
     const freeName = deriveFreePdfFileName(url);
     if (freeName) return freeName;
   }
+  if (provider === "free_mobile_provider") {
+    const freeMobileName = deriveFreeMobilePdfFileName(url);
+    if (freeMobileName) return freeMobileName;
+  }
 
   const fromDisposition = parseFilenameFromContentDisposition(contentDisposition);
   if (fromDisposition) return fromDisposition;
@@ -387,6 +417,104 @@ function deriveFreePdfFileName(url) {
   if (noFacture) return `facture_${noFacture}.pdf`;
   if (/^\d{6}$/.test(mois)) return `facture_${mois}.pdf`;
   return "facture_free.pdf";
+}
+
+function deriveFreeMobilePdfFileName(url) {
+  let parsed = null;
+  try {
+    parsed = new URL(url, location.href);
+  } catch (_error) {
+    return null;
+  }
+
+  const invoiceId = (parsed.pathname || "").match(/\/api\/SI\/invoice\/(\d+)\b/i)?.[1];
+  if (!invoiceId) return null;
+  return `facture_free_mobile_${invoiceId}.pdf`;
+}
+
+async function findBestFreeMobileInvoiceControl(billingSelectors, timeoutMs) {
+  const invoicesVisible = await ensureFreeMobileInvoicesVisible(timeoutMs);
+  if (!invoicesVisible) return null;
+
+  const invoicesPanel = getFreeMobileInvoicesPanel();
+  if (!invoicesPanel) return null;
+
+  const latestSelectors = [
+    "a[download][href*='/account/v2/api/SI/invoice/'][href*='display=1']",
+    "a[download][href*='/api/SI/invoice/'][href*='display=1']",
+    "a[href*='/account/v2/api/SI/invoice/'][href*='display=1']",
+    "a[href*='/api/SI/invoice/'][href*='display=1']"
+  ];
+
+  const latestCta = pickFreeMobileLatestInvoiceCta(invoicesPanel, latestSelectors);
+  if (latestCta) return latestCta;
+
+  const fallbackSelectors = [
+    "#invoices ul li a[href*='/api/SI/invoice/'][href*='display=1']",
+    "#invoices a[href*='/api/SI/invoice/'][href*='display=1']",
+    ...((billingSelectors?.downloadButton && Array.isArray(billingSelectors.downloadButton))
+      ? billingSelectors.downloadButton.map((selector) => selector.startsWith("#invoices") ? selector : `#invoices ${selector}`)
+      : [])
+  ];
+
+  return waitForVisible(fallbackSelectors, 4000);
+}
+
+function pickFreeMobileLatestInvoiceCta(invoicesPanel, selectors) {
+  const ctas = firstNonEmptyQueryWithin(invoicesPanel, selectors);
+  if (!ctas.length) return null;
+  const preferred = ctas.find((node) => {
+    const text = normalizeText(node.textContent || "");
+    return text.includes("telecharger ma facture");
+  });
+  return preferred || ctas[0] || null;
+}
+
+async function ensureFreeMobileInvoicesVisible(timeoutMs) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const panel = getFreeMobileInvoicesPanel();
+    if (panel) return true;
+
+    if (!/^\/account\/v2(?:\/|$)/.test(location.pathname)) {
+      const consoAndFactures = findClickableByText("conso et factures");
+      if (consoAndFactures) {
+        realClick(consoAndFactures);
+        await wait(500);
+      }
+    }
+
+    const invoicesTab = pick([
+      "button[role='tab'][aria-controls='invoices']",
+      "button[aria-controls='invoices']",
+      "#invoices ~ ul [aria-controls='invoices']"
+    ]);
+    if (invoicesTab) {
+      realClick(invoicesTab);
+      await wait(350);
+    } else {
+      const invoicesByText = findClickableByText("mes factures");
+      if (invoicesByText) {
+        realClick(invoicesByText);
+        await wait(350);
+      }
+    }
+  }
+  return false;
+}
+
+function getFreeMobileInvoicesPanel() {
+  const panel = document.querySelector("#invoices");
+  if (!panel) return null;
+  if (!isVisible(panel)) return null;
+  if (panel.hasAttribute("hidden") || panel.classList.contains("hidden")) return null;
+  return panel;
+}
+
+function findClickableByText(text) {
+  const target = normalizeText(text);
+  const nodes = Array.from(document.querySelectorAll("button,a,[role='tab']"));
+  return nodes.find((node) => normalizeText(node.textContent || "").includes(target) && isVisible(node)) || null;
 }
 
 function findLinkByText(words) {
@@ -452,6 +580,18 @@ function firstNonEmptyQuery(selectors) {
   for (const selector of selectors) {
     try {
       const nodes = Array.from(document.querySelectorAll(selector)).filter(isVisible);
+      if (nodes.length) return nodes;
+    } catch (_error) {
+      // Ignore invalid selectors.
+    }
+  }
+  return [];
+}
+
+function firstNonEmptyQueryWithin(root, selectors) {
+  for (const selector of selectors) {
+    try {
+      const nodes = Array.from(root.querySelectorAll(selector)).filter(isVisible);
       if (nodes.length) return nodes;
     } catch (_error) {
       // Ignore invalid selectors.
@@ -551,34 +691,48 @@ function isFreeMobileAuthenticated() {
   if (!location.hostname.includes("mobile.free.fr")) return false;
   if (isFreeMobileOtpRequired()) return false;
 
-  const loginSelectors = getProviderLoginSelectors("free_mobile_provider");
-  const hasLoginField = Boolean(queryWithin(document, loginSelectors.username) || queryWithin(document, loginSelectors.password));
-  if (hasLoginField) return false;
-
-  // Login route means we are not fully authenticated yet.
-  if (location.pathname.includes("/account/v2/login")) return false;
-  return true;
+  const diagnostics = getFreeMobileAuthDiagnostics();
+  return diagnostics.authenticatedGuess;
 }
 
 function isFreeMobileOtpRequired() {
-  const otpSelectors = [
-    "input[autocomplete='one-time-code']",
-    "input[name*='code']",
-    "input[id*='code']",
-    "input[name*='otp']",
-    "input[id*='otp']"
-  ];
-  const hasOtpInput = otpSelectors.some((selector) => {
-    try {
-      return Boolean(document.querySelector(selector));
-    } catch (_error) {
-      return false;
-    }
-  });
-  if (hasOtpInput) return true;
+  const hasExplicitOtpInput = Boolean(
+    queryWithin(document, [
+      "input[autocomplete='one-time-code']",
+      "input[name='otp']",
+      "input[id='otp']",
+      "input[name='smsCode']",
+      "input[id='smsCode']",
+      "input[name='verificationCode']",
+      "input[id='verificationCode']"
+    ])
+  );
+  if (hasExplicitOtpInput) return true;
+
+  const hasGenericOtpInput = Boolean(
+    queryWithin(document, [
+      "input[name*='otp']",
+      "input[id*='otp']",
+      "input[name*='verification']",
+      "input[id*='verification']"
+    ])
+  );
 
   const text = normalizeText(document.body?.textContent || "");
-  return text.includes("code") && text.includes("sms");
+  const hasOtpChallengeText = (
+    text.includes("code de verification")
+    || text.includes("code de vérification")
+    || text.includes("saisissez le code")
+    || text.includes("entrer le code")
+    || text.includes("entrez le code")
+    || text.includes("code recu par sms")
+    || text.includes("code reçu par sms")
+    || text.includes("mot de passe a usage unique")
+    || text.includes("mot de passe à usage unique")
+  );
+
+  // Avoid false positives from account pages (e.g. "SMS/MMS", "Mes codes promo").
+  return hasGenericOtpInput && hasOtpChallengeText;
 }
 
 function getProviderLoginSelectors(provider) {
@@ -833,4 +987,46 @@ function setNativeInputValue(input, value) {
     return;
   }
   input.value = value;
+}
+
+function getFreeMobileAuthDiagnostics() {
+  const text = normalizeText(document.body?.textContent || "");
+  const pathname = String(location.pathname || "");
+  const onLoginRoute = /\/account\/v2\/login(?:\/|$)/.test(pathname);
+  const inAccountArea = /^\/account\/v2(?:\/|$)/.test(pathname);
+  const hasExplicitLoginField = Boolean(
+    document.querySelector("#login-username")
+    || document.querySelector("#login-password")
+  );
+  const hasAuthenticatedMarker = Boolean(
+    document.querySelector("#user-login, #user-name, #user-msisdn")
+    || document.querySelector("button[aria-controls='invoices']")
+    || document.querySelector("#invoices")
+    || text.includes("conso et factures")
+    || text.includes("mes factures")
+    || text.includes("deconnexion")
+  );
+  const otpRequired = isFreeMobileOtpRequired();
+  const authenticatedGuess = !otpRequired && (hasAuthenticatedMarker || (inAccountArea && !onLoginRoute && !hasExplicitLoginField));
+
+  return {
+    href: String(location.href || ""),
+    pathname,
+    onLoginRoute,
+    inAccountArea,
+    otpRequired,
+    hasExplicitLoginField,
+    hasAuthenticatedMarker,
+    hasUserLoginNode: Boolean(document.querySelector("#user-login")),
+    hasUserNameNode: Boolean(document.querySelector("#user-name")),
+    hasUserMsisdnNode: Boolean(document.querySelector("#user-msisdn")),
+    hasInvoicesPanel: Boolean(document.querySelector("#invoices")),
+    hasInvoicesTab: Boolean(document.querySelector("button[aria-controls='invoices']")),
+    authenticatedGuess
+  };
+}
+
+function summarizeFreeMobileDiagnostics() {
+  const d = getFreeMobileAuthDiagnostics();
+  return `href=${d.href} path=${d.pathname} loginRoute=${d.onLoginRoute} accountArea=${d.inAccountArea} otp=${d.otpRequired} loginFields=${d.hasExplicitLoginField} authMarker=${d.hasAuthenticatedMarker} userNodes=${d.hasUserLoginNode || d.hasUserNameNode || d.hasUserMsisdnNode} invoicesTab=${d.hasInvoicesTab} invoicesPanel=${d.hasInvoicesPanel} authGuess=${d.authenticatedGuess}`;
 }

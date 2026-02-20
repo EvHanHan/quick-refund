@@ -30,7 +30,7 @@ const PROVIDER_CONFIGS = {
   },
   free_mobile_provider: {
     loginUrl: "https://mobile.free.fr/account/v2/login",
-    billingUrl: "https://mobile.free.fr/account/v2/home"
+    billingUrl: "https://mobile.free.fr/account/v2"
   }
 };
 
@@ -178,9 +178,20 @@ async function runStep(state) {
         const session = await runProviderAction("CHECK_PROVIDER_SESSION", flowContext.orangeTabId, {
           Provider: flowContext.runConfig.Provider
         }, TIMEOUTS_MS.DEFAULT);
+        if (flowContext.runConfig.Provider === "free_mobile_provider" && session?.diagnostics) {
+          emitEvent(
+            FlowState.AUTH_ORANGE,
+            FlowStatus.STARTED,
+            `Free Mobile session probe: auth=${Boolean(session?.authenticated)} | ${formatFreeMobileDiagnostics(session.diagnostics)}`
+          );
+        }
         if (session?.authenticated) {
           clearRunPassword();
-          emitEvent(FlowState.AUTH_ORANGE, FlowStatus.SUCCESS, `${flowContext.runConfig.Provider} session already active, skipping login`);
+          emitEvent(
+            FlowState.AUTH_ORANGE,
+            FlowStatus.SUCCESS,
+            `${flowContext.runConfig.Provider} session already active, skipping login${flowContext.runConfig.Provider === "free_mobile_provider" && session?.diagnostics ? ` | ${formatFreeMobileDiagnostics(session.diagnostics)}` : ""}`
+          );
           return;
         }
 
@@ -189,6 +200,13 @@ async function runStep(state) {
         username: flowContext.runConfig.Username,
         password: flowContext.runConfig.Password
       }, TIMEOUTS_MS.DEFAULT);
+        if (flowContext.runConfig.Provider === "free_mobile_provider") {
+          emitEvent(
+            FlowState.AUTH_ORANGE,
+            FlowStatus.STARTED,
+            `Free Mobile auth result: manual=${Boolean(authResult?.manualLoginRequired)} captcha=${Boolean(authResult?.captchaRequired)} otp=${Boolean(authResult?.smsCodeRequired)}`
+          );
+        }
 
         if (authResult?.manualLoginRequired) {
           flowContext.waitingForUser = true;
@@ -210,7 +228,7 @@ async function runStep(state) {
       return;
     case FlowState.NAVIGATE_ORANGE_BILLING:
       // Free ADSL uses session params in URL (ex: idt), avoid overriding current session page.
-      if (flowContext.runConfig.Provider !== "free_provider") {
+      if (flowContext.runConfig.Provider !== "free_provider" && flowContext.runConfig.Provider !== "free_mobile_provider") {
         await navigateTab(
           flowContext.orangeTabId,
           providerConfig.billingUrl
@@ -641,4 +659,21 @@ function compareVersions(a, b) {
     if (l < r) return -1;
   }
   return 0;
+}
+
+function formatFreeMobileDiagnostics(diagnostics) {
+  if (!diagnostics || typeof diagnostics !== "object") return "no diagnostics";
+  const d = diagnostics;
+  return [
+    `path=${String(d.pathname || "")}`,
+    `loginRoute=${Boolean(d.onLoginRoute)}`,
+    `accountArea=${Boolean(d.inAccountArea)}`,
+    `otp=${Boolean(d.otpRequired)}`,
+    `loginFields=${Boolean(d.hasExplicitLoginField)}`,
+    `authMarker=${Boolean(d.hasAuthenticatedMarker)}`,
+    `userNodes=${Boolean(d.hasUserLoginNode || d.hasUserNameNode || d.hasUserMsisdnNode)}`,
+    `invoicesTab=${Boolean(d.hasInvoicesTab)}`,
+    `invoicesPanel=${Boolean(d.hasInvoicesPanel)}`,
+    `authGuess=${Boolean(d.authenticatedGuess)}`
+  ].join(" ");
 }

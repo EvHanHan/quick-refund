@@ -45,7 +45,7 @@
       id: "free_mobile_provider",
       label: "Free Mobile",
       loginUrl: "https://mobile.free.fr/account/v2/login",
-      billingUrl: "https://mobile.free.fr/account/v2/home",
+      billingUrl: "https://mobile.free.fr/account/v2",
       hosts: ["mobile.free.fr", "free.fr"],
       requiresContractSelection: false
     }

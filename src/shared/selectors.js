@@ -149,14 +149,11 @@
         login: {
           username: [
             "input#login-username[name='username']",
-            "input#login-username",
-            "input[name='username']"
+            "input#login-username"
           ],
           password: [
             "input#login-password[name='password']",
-            "input#login-password",
-            "input[name='password']",
-            "input[type='password']"
+            "input#login-password"
           ],
           submit: [
             "button#auth-connect[type='submit']",
@@ -166,11 +163,15 @@
         },
         billing: {
           invoiceLinks: [
+            "a[download][href*='/account/v2/api/SI/invoice/'][href*='display=1']",
+            "a[href*='/account/v2/api/SI/invoice/'][href*='display=1']",
             "a[href*='facture']",
             "a[href*='invoice']",
             "a[href*='.pdf']"
           ],
           downloadButton: [
+            "a[download][href*='/account/v2/api/SI/invoice/'][href*='display=1']",
+            "a[href*='/account/v2/api/SI/invoice/'][href*='display=1']",
             "a[href*='.pdf']",
             "a[href*='facture']"
           ]
