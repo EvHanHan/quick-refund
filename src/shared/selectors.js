@@ -176,6 +176,41 @@
             "a[href*='facture']"
           ]
         }
+      },
+      navigo_provider: {
+        login: {
+          username: [
+            "input#id-Mail[name='username']",
+            "input#id-Mail",
+            "input[name='username']"
+          ],
+          password: [
+            "input#id-pwd[name='password']",
+            "input#id-pwd",
+            "input[name='password']",
+            "input[type='password']"
+          ],
+          submit: [
+            "button#login-bt[type='submit']",
+            "button#login-bt",
+            "button[name='login']",
+            "button[type='submit']"
+          ]
+        },
+        billing: {
+          invoiceLinks: [
+            "a[href*='attestation']",
+            "a[href*='prelevement']",
+            "a[href*='download']",
+            "a[href*='.pdf']"
+          ],
+          downloadButton: [
+            "a[href*='attestation'][href*='download']",
+            "a[href*='attestation']",
+            "a[href*='.pdf']",
+            "button"
+          ]
+        }
       }
     },
     navan: {

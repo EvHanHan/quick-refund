@@ -119,7 +119,7 @@ async function autofillTransaction(draft) {
 }
 
 async function uploadDocument(documentPayload) {
-  void documentPayload;
+  const navanHints = documentPayload?.navanHints || {};
   await wait(15_000);
   const created = await waitAndClickCreateSingleTransaction(5_000);
   if (!created) {
@@ -130,11 +130,13 @@ async function uploadDocument(documentPayload) {
     };
   }
 
-  const expenseTypeSelected = await finalizeExpenseTypeSelection();
+  const hintsApplied = await applyNavanHints(navanHints);
+  const expenseTypeSelected = await finalizeExpenseTypeSelection(navanHints.expenseType);
   return {
     uploaded: true,
     createSingleTransactionClicked: created,
-    expenseTypeSelected
+    expenseTypeSelected,
+    hintsApplied
   };
 }
 
@@ -330,11 +332,12 @@ function findCreateSingleTransactionButton() {
   return candidates.find((btn) => normalizeText(btn.textContent) === "create a single transaction") || null;
 }
 
-async function finalizeExpenseTypeSelection() {
+async function finalizeExpenseTypeSelection(expenseTypeHint) {
   await wait(15_000);
   clickDraftTag();
   await wait(400);
-  return selectExpenseTypeWorkFromHome(20_000);
+  const desiredType = normalizeText(expenseTypeHint || "work from home");
+  return selectExpenseTypeByLabel(desiredType, 20_000);
 }
 
 function clickPageSide() {
@@ -364,15 +367,41 @@ function findDraftTagNode() {
   return candidates.find((node) => normalizeText(node.textContent) === "draft") || null;
 }
 
-async function selectExpenseTypeWorkFromHome(timeoutMs) {
+async function applyNavanHints(hints) {
+  if (!hints || typeof hints !== "object") return false;
+
+  let changed = false;
+  if (typeof hints.transactionDateISO === "string" && hints.transactionDateISO) {
+    const dateSet = await setTransactionDate(hints.transactionDateISO);
+    changed = changed || dateSet;
+  }
+  return changed;
+}
+
+async function setTransactionDate(transactionDateISO) {
+  const s = window.__EXT_SELECTORS__.navan.transactionForm;
   const start = Date.now();
+  while (Date.now() - start < 10_000) {
+    const dateInput = queryAny(s.date);
+    if (dateInput) {
+      setField(s.date, transactionDateISO);
+      return true;
+    }
+    await wait(250);
+  }
+  return false;
+}
+
+async function selectExpenseTypeByLabel(optionText, timeoutMs) {
+  const start = Date.now();
+  const looseTarget = normalizeComparableText(optionText || "");
   while (Date.now() - start < timeoutMs) {
     const input = findExpenseTypeInput();
     if (input) {
       realClick(input);
       input.focus?.();
       await wait(200);
-      const option = findWorkFromHomeOption();
+      const option = findExpenseTypeOption(looseTarget);
       if (option) {
         realClick(option);
         return true;
@@ -390,10 +419,21 @@ function findExpenseTypeInput() {
   return container.closest("span,div,section,form")?.querySelector("input[type='text']") || null;
 }
 
-function findWorkFromHomeOption() {
+function findExpenseTypeOption(looseTarget) {
   const candidates = Array.from(document.querySelectorAll("button,li,div,span,[role='option']"));
   return candidates.find((node) => {
-    const text = normalizeText(node.textContent);
+    const text = normalizeComparableText(node.textContent);
+    if (text.includes(looseTarget)) return true;
+    // Legacy typo-safe fallback.
     return text.includes("work from home") || text.includes("work frol home");
   }) || null;
+}
+
+function normalizeComparableText(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
 }

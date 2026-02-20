@@ -48,6 +48,14 @@
       billingUrl: "https://mobile.free.fr/account/v2",
       hosts: ["mobile.free.fr", "free.fr"],
       requiresContractSelection: false
+    },
+    navigo_provider: {
+      id: "navigo_provider",
+      label: "Navigo",
+      loginUrl: "https://mon-espace.iledefrance-mobilites.fr",
+      billingUrl: "https://mon-espace.iledefrance-mobilites.fr",
+      hosts: ["mon-espace.iledefrance-mobilites.fr", "connect.iledefrance-mobilites.fr", "iledefrance-mobilites.fr"],
+      requiresContractSelection: false
     }
   };
 

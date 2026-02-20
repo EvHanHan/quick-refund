@@ -31,6 +31,10 @@ const PROVIDER_CONFIGS = {
   free_mobile_provider: {
     loginUrl: "https://mobile.free.fr/account/v2/login",
     billingUrl: "https://mobile.free.fr/account/v2"
+  },
+  navigo_provider: {
+    loginUrl: "https://mon-espace.iledefrance-mobilites.fr",
+    billingUrl: "https://mon-espace.iledefrance-mobilites.fr"
   }
 };
 
@@ -175,9 +179,19 @@ async function runStep(state) {
       return;
     case FlowState.AUTH_ORANGE:
       {
+        emitEvent(
+          FlowState.AUTH_ORANGE,
+          FlowStatus.STARTED,
+          `Provider action CHECK_PROVIDER_SESSION (provider=${flowContext.runConfig.Provider}, timeout=${TIMEOUTS_MS.DEFAULT}ms)`
+        );
         const session = await runProviderAction("CHECK_PROVIDER_SESSION", flowContext.orangeTabId, {
           Provider: flowContext.runConfig.Provider
         }, TIMEOUTS_MS.DEFAULT);
+        emitEvent(
+          FlowState.AUTH_ORANGE,
+          FlowStatus.STARTED,
+          `Provider action CHECK_PROVIDER_SESSION completed (authenticated=${Boolean(session?.authenticated)})`
+        );
         if (flowContext.runConfig.Provider === "free_mobile_provider" && session?.diagnostics) {
           emitEvent(
             FlowState.AUTH_ORANGE,
@@ -195,11 +209,21 @@ async function runStep(state) {
           return;
         }
 
+        emitEvent(
+          FlowState.AUTH_ORANGE,
+          FlowStatus.STARTED,
+          `Provider action AUTH_PROVIDER (provider=${flowContext.runConfig.Provider}, timeout=${TIMEOUTS_MS.DEFAULT}ms)`
+        );
         const authResult = await runProviderAction("AUTH_PROVIDER", flowContext.orangeTabId, {
         Provider: flowContext.runConfig.Provider,
         username: flowContext.runConfig.Username,
         password: flowContext.runConfig.Password
       }, TIMEOUTS_MS.DEFAULT);
+        emitEvent(
+          FlowState.AUTH_ORANGE,
+          FlowStatus.STARTED,
+          `Provider action AUTH_PROVIDER completed (authenticated=${Boolean(authResult?.authenticated)} manual=${Boolean(authResult?.manualLoginRequired)} captcha=${Boolean(authResult?.captchaRequired)})`
+        );
         if (flowContext.runConfig.Provider === "free_mobile_provider") {
           emitEvent(
             FlowState.AUTH_ORANGE,
@@ -228,27 +252,75 @@ async function runStep(state) {
       return;
     case FlowState.NAVIGATE_ORANGE_BILLING:
       // Free ADSL uses session params in URL (ex: idt), avoid overriding current session page.
-      if (flowContext.runConfig.Provider !== "free_provider" && flowContext.runConfig.Provider !== "free_mobile_provider") {
+      if (
+        flowContext.runConfig.Provider !== "free_provider"
+        && flowContext.runConfig.Provider !== "free_mobile_provider"
+        && flowContext.runConfig.Provider !== "navigo_provider"
+      ) {
         await navigateTab(
           flowContext.orangeTabId,
           providerConfig.billingUrl
         );
       }
       {
-        const navigation = await runProviderAction("NAVIGATE_BILLING", flowContext.orangeTabId, {
+        emitEvent(
+          FlowState.NAVIGATE_ORANGE_BILLING,
+          FlowStatus.STARTED,
+          `Provider action NAVIGATE_BILLING (provider=${flowContext.runConfig.Provider}, timeout=${TIMEOUTS_MS.DEFAULT}ms)`
+        );
+        let navigation = await runProviderAction("NAVIGATE_BILLING", flowContext.orangeTabId, {
         Provider: flowContext.runConfig.Provider,
         AccountType: flowContext.runConfig.AccountType
       }, TIMEOUTS_MS.DEFAULT);
+        emitEvent(
+          FlowState.NAVIGATE_ORANGE_BILLING,
+          FlowStatus.STARTED,
+          `Provider action NAVIGATE_BILLING completed (navigated=${Boolean(navigation?.navigated)} detailUrl=${navigation?.detailUrl || "none"})`
+        );
         if (!navigation?.detailUrl) {
           throw new FlowError(ErrorCode.ORANGE_BILL_NOT_FOUND, "Could not resolve provider bill detail URL");
         }
         await navigateTab(flowContext.orangeTabId, navigation.detailUrl);
+
+        if (flowContext.runConfig.Provider === "navigo_provider") {
+          for (let attempt = 1; attempt <= 2; attempt += 1) {
+            const onPrelevements = /\/prelevements\/[^/?#]+/i.test(String(navigation.detailUrl || ""));
+            if (onPrelevements) break;
+
+            emitEvent(
+              FlowState.NAVIGATE_ORANGE_BILLING,
+              FlowStatus.STARTED,
+              `Navigo extra NAVIGATE_BILLING pass ${attempt}/2`
+            );
+            navigation = await runProviderAction("NAVIGATE_BILLING", flowContext.orangeTabId, {
+              Provider: flowContext.runConfig.Provider,
+              AccountType: flowContext.runConfig.AccountType
+            }, TIMEOUTS_MS.DEFAULT);
+            emitEvent(
+              FlowState.NAVIGATE_ORANGE_BILLING,
+              FlowStatus.STARTED,
+              `Navigo extra pass ${attempt}/2 resolved detailUrl=${navigation?.detailUrl || "none"}`
+            );
+            if (!navigation?.detailUrl) break;
+            await navigateTab(flowContext.orangeTabId, navigation.detailUrl);
+          }
+        }
       }
       return;
     case FlowState.DOWNLOAD_OR_SELECT_BILL: {
+      emitEvent(
+        FlowState.DOWNLOAD_OR_SELECT_BILL,
+        FlowStatus.STARTED,
+        `Provider action DOWNLOAD_AND_EXTRACT_BILL (provider=${flowContext.runConfig.Provider}, timeout=${TIMEOUTS_MS.LONG}ms)`
+      );
       const result = await runProviderAction("DOWNLOAD_AND_EXTRACT_BILL", flowContext.orangeTabId, {
         Provider: flowContext.runConfig.Provider
       }, TIMEOUTS_MS.LONG);
+      emitEvent(
+        FlowState.DOWNLOAD_OR_SELECT_BILL,
+        FlowStatus.STARTED,
+        `Provider action DOWNLOAD_AND_EXTRACT_BILL completed (hasDocument=${Boolean(result?.document)} sourceUrl=${result?.document?.sourceUrl || "none"})`
+      );
       if (!result?.document) {
         throw new FlowError(ErrorCode.ORANGE_BILL_NOT_FOUND, "Could not find downloadable billing document");
       }

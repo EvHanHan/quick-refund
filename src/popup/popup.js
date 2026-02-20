@@ -13,10 +13,20 @@ const UsernameInput = document.getElementById("Username");
 const PasswordInput = document.getElementById("Password");
 const AccountTypeInput = document.getElementById("AccountType");
 const ProviderInput = document.getElementById("Provider");
+const DEFAULT_BILLING_OPTIONS = [
+  { value: "home_internet", label: "Home internet (Offre internet)" },
+  { value: "mobile_internet", label: "Mobile internet (Forfait mobile)" }
+];
+const NAVIGO_BILLING_OPTIONS = [
+  { value: "commuter_benefits", label: "Commuter Benefits" }
+];
 
 UsernameInput.addEventListener("input", persistLoginDraft);
 AccountTypeInput.addEventListener("change", persistLoginDraft);
-ProviderInput.addEventListener("change", persistLoginDraft);
+ProviderInput.addEventListener("change", () => {
+  syncBillingTypeOptions(ProviderInput.value, AccountTypeInput.value);
+  persistLoginDraft();
+});
 window.addEventListener("beforeunload", persistLoginDraft);
 
 startButton.addEventListener("click", async () => {
@@ -156,12 +166,11 @@ async function initPopup() {
 
 async function loadLoginCacheIntoForm() {
   const cached = await readLoginCache();
-  if (!cached) return;
-
-  UsernameInput.value = cached.Username || "";
-  AccountTypeInput.value = cached.AccountType || "home_internet";
-  const provider = cached.Provider === "freemobile_provider" ? "free_mobile_provider" : cached.Provider;
+  const provider = cached?.Provider === "freemobile_provider" ? "free_mobile_provider" : cached?.Provider;
   ProviderInput.value = provider || "orange_provider";
+  syncBillingTypeOptions(ProviderInput.value, cached?.AccountType);
+  if (!cached) return;
+  UsernameInput.value = cached.Username || "";
 }
 
 async function saveLoginCache(login) {
@@ -203,4 +212,20 @@ function persistLoginDraft() {
   const Provider = ProviderInput.value;
   if (!Username) return;
   void saveLoginCache({ Username, AccountType, Provider });
+}
+
+function syncBillingTypeOptions(provider, preferredValue) {
+  const options = provider === "navigo_provider" ? NAVIGO_BILLING_OPTIONS : DEFAULT_BILLING_OPTIONS;
+  setBillingTypeOptions(options, preferredValue);
+}
+
+function setBillingTypeOptions(options, preferredValue) {
+  if (!Array.isArray(options) || options.length === 0) return;
+  const previous = preferredValue || AccountTypeInput.value;
+  AccountTypeInput.innerHTML = options
+    .map((option) => `<option value="${option.value}">${option.label}</option>`)
+    .join("");
+
+  const hasPreferred = options.some((option) => option.value === previous);
+  AccountTypeInput.value = hasPreferred ? previous : options[0].value;
 }

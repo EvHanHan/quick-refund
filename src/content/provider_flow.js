@@ -65,6 +65,12 @@ function checkProviderBillingReady(provider) {
       diagnostics
     };
   }
+  if (provider === "navigo_provider") {
+    return {
+      ready: isProviderAuthenticated(provider)
+        && (findByLooseText("mon navigo") || findByLooseText("mes services") || findByLooseText("bienvenue"))
+    };
+  }
 
   return {
     ready: isProviderAuthenticated(provider)
@@ -133,6 +139,42 @@ async function authProvider(provider, payload) {
     }
 
     // If an extra challenge appears, wait for user and auto-resume via watcher on page change.
+    return { authenticated: false, manualLoginRequired: true, captchaRequired: false };
+  }
+
+  if (provider === "navigo_provider") {
+    const s = getProviderLoginSelectors(provider);
+    const username = await waitForVisible(s.username, 8000);
+    if (!username) {
+      if (isProviderAuthenticated(provider)) {
+        return { authenticated: true, skippedLogin: true, captchaRequired: false };
+      }
+      throw new Error("Could not locate Navigo username field");
+    }
+
+    if (payload.username) {
+      setInputValue(username, payload.username || "");
+    }
+    const password = await waitForVisible(s.password, 8000);
+    if (!password) {
+      throw new Error("Could not locate Navigo password field");
+    }
+    if (hasProvidedPassword) {
+      setInputValue(password, providedPassword);
+    }
+
+    const submit = pick(s.submit);
+    if (!submit) {
+      throw new Error("Could not locate Navigo login button");
+    }
+    if (!hasProvidedPassword && !hasInputValue(password)) {
+      return { authenticated: false, manualLoginRequired: true, captchaRequired: false };
+    }
+    realClick(submit);
+    await wait(1200);
+    if (isProviderAuthenticated(provider)) {
+      return { authenticated: true, captchaRequired: false };
+    }
     return { authenticated: false, manualLoginRequired: true, captchaRequired: false };
   }
 
@@ -239,6 +281,26 @@ async function navigateBilling(provider, payload) {
     return { navigated: true, detailUrl: "https://mobile.free.fr/account/v2" };
   }
 
+  if (provider === "navigo_provider") {
+    if (!isProviderAuthenticated(provider)) {
+      throw new Error("Navigo user is not authenticated");
+    }
+    const prelevementsUrl = resolveNavigoPrelevementsUrl();
+    if (prelevementsUrl) {
+      return { navigated: true, detailUrl: prelevementsUrl };
+    }
+
+    const directBillingUrl = resolveNavigoBillingEntryUrl();
+    if (directBillingUrl) {
+      return { navigated: true, detailUrl: directBillingUrl };
+    }
+    const navigoTab = await clickNavigoBillingPath(8000);
+    if (!navigoTab) {
+      throw new Error(`Could not open Navigo billing section | ${summarizeNavigoPageDiagnostics()}`);
+    }
+    return { navigated: true, detailUrl: location.href };
+  }
+
   // Generic provider path: navigate to a discoverable invoice page/link.
   const generic = window.__EXT_SELECTORS__.providerDefaults.billing.invoiceLinks;
   const invoiceEntry = await waitForVisible(generic, 8000);
@@ -260,6 +322,8 @@ async function downloadAndExtractBill(provider) {
     ? await findBestFreeInvoiceControl(billing.downloadButton, 12000)
     : provider === "free_mobile_provider"
       ? await findBestFreeMobileInvoiceControl(billing, 12000)
+    : provider === "navigo_provider"
+      ? await findBestNavigoInvoiceControl(billing, 20000)
     : await waitForVisible(billing.downloadButton, 12000);
   if (!downloadControl) {
     throw new Error("Could not find provider PDF download button");
@@ -292,7 +356,13 @@ async function downloadAndExtractBill(provider) {
       mimeType: "application/pdf",
       dataUrl: null,
       sourceUrl: href,
-      manualUploadRequired: true
+      manualUploadRequired: true,
+      navanHints: provider === "navigo_provider"
+        ? {
+          expenseType: "commuter benefits",
+          transactionDateISO: getCurrentMonthStartISO()
+        }
+        : undefined
     }
   };
 }
@@ -386,6 +456,10 @@ function deriveFileName(provider, url, contentType, contentDisposition) {
     const freeMobileName = deriveFreeMobilePdfFileName(url);
     if (freeMobileName) return freeMobileName;
   }
+  if (provider === "navigo_provider") {
+    const navigoName = deriveNavigoPdfFileName(url);
+    if (navigoName) return navigoName;
+  }
 
   const fromDisposition = parseFilenameFromContentDisposition(contentDisposition);
   if (fromDisposition) return fromDisposition;
@@ -430,6 +504,22 @@ function deriveFreeMobilePdfFileName(url) {
   const invoiceId = (parsed.pathname || "").match(/\/api\/SI\/invoice\/(\d+)\b/i)?.[1];
   if (!invoiceId) return null;
   return `facture_free_mobile_${invoiceId}.pdf`;
+}
+
+function deriveNavigoPdfFileName(url) {
+  let parsed = null;
+  try {
+    parsed = new URL(url, location.href);
+  } catch (_error) {
+    return null;
+  }
+
+  const rawId = parsed.searchParams.get("id") || parsed.searchParams.get("documentId");
+  const documentId = String(rawId || "").trim();
+  if (documentId) return `attestation_navigo_${documentId}.pdf`;
+  return /attestation|prelev/i.test(parsed.pathname || "")
+    ? `attestation_navigo_${getCurrentMonthStartISO().slice(0, 7)}.pdf`
+    : null;
 }
 
 async function findBestFreeMobileInvoiceControl(billingSelectors, timeoutMs) {
@@ -515,6 +605,262 @@ function findClickableByText(text) {
   const target = normalizeText(text);
   const nodes = Array.from(document.querySelectorAll("button,a,[role='tab']"));
   return nodes.find((node) => normalizeText(node.textContent || "").includes(target) && isVisible(node)) || null;
+}
+
+function findByLooseText(text) {
+  const target = normalizeComparableText(text);
+  const candidates = Array.from(document.querySelectorAll("button,a,div,span,label,h1,h2,h3,p"));
+  return candidates.find((node) => normalizeComparableText(node.textContent || "").includes(target)) || null;
+}
+
+function resolveNavigoBillingEntryUrl() {
+  const monNavigoAnchor = findNavigoAnchorByText("mon navigo");
+  const monNavigoHref = normalizeUrl(monNavigoAnchor?.getAttribute("href"));
+  if (monNavigoHref) return monNavigoHref;
+
+  return null;
+}
+
+function resolveNavigoPrelevementsUrl() {
+  const currentPath = String(location.pathname || "");
+  const onPrelevements = currentPath.match(/\/prelevements\/([^/?#]+)/i);
+  if (onPrelevements?.[1]) {
+    return location.href;
+  }
+
+  const onDetail = currentPath.match(/\/espace_client\/detail\/([^/?#]+)/i);
+  if (onDetail?.[1]) {
+    return `https://www.jegeremacartenavigo.iledefrance-mobilites.fr/prelevements/${onDetail[1]}`;
+  }
+
+  const annualContractId = findNavigoAnnualContractIdFromList();
+  if (annualContractId) {
+    return `https://www.jegeremacartenavigo.iledefrance-mobilites.fr/prelevements/${annualContractId}`;
+  }
+
+  return null;
+}
+
+function findNavigoAnchorByText(text) {
+  const target = normalizeComparableText(text);
+  const anchors = Array.from(document.querySelectorAll("a[href]"));
+  const best = anchors.find((a) => normalizeComparableText(a.textContent || "").includes(target));
+  if (best) return best;
+  return null;
+}
+
+function findClickableByLooseText(text) {
+  const target = normalizeComparableText(text);
+  const nodes = Array.from(document.querySelectorAll("button,a,[role='button'],[role='tab'],option,li,span,div"));
+  return nodes.find((node) => normalizeComparableText(node.textContent || "").includes(target) && isVisible(node)) || null;
+}
+
+async function clickNavigoBillingPath(timeoutMs) {
+  const start = Date.now();
+
+  while (Date.now() - start < timeoutMs) {
+    const monNavigo = findClickableByLooseText("mon navigo");
+    if (monNavigo) {
+      realClick(monNavigo);
+      await wait(800);
+    }
+
+    if (hasNavigoAnnualActiveEntry() || hasNavigoPrelevementsEntry()) {
+      return true;
+    }
+    await wait(250);
+  }
+  return false;
+}
+
+async function findBestNavigoInvoiceControl(billingSelectors, timeoutMs) {
+  const opened = await openNavigoAttestationFlow(timeoutMs);
+  if (!opened) return null;
+
+  const explicitButton = pick([
+    "button#download-certificate-btn",
+    ".dropdown-menu #download-certificate-btn"
+  ]);
+  if (explicitButton) return explicitButton;
+
+  const forcedSelectors = [
+    "a[href*='attestation'][href*='prelevement'][href*='download']",
+    "a[href*='attestation'][href*='prelevement']",
+    "a[href*='attestation'][href*='pdf']",
+    "a[href*='prelevement'][href*='pdf']"
+  ];
+  const scoped = (billingSelectors?.downloadButton && Array.isArray(billingSelectors.downloadButton))
+    ? billingSelectors.downloadButton
+    : [];
+  const selectors = [...forcedSelectors, ...scoped];
+  const control = await waitForVisible(selectors, 8000);
+  if (control) return control;
+
+  const looseControl = findClickableByLooseText("telecharger mes attestations")
+    || findClickableByLooseText("télécharger mes attestations");
+  return looseControl || null;
+}
+
+async function openNavigoAttestationFlow(timeoutMs) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const annualActive = findNavigoAnnualActiveEntry();
+    if (annualActive) {
+      realClick(annualActive);
+      await wait(1000);
+    }
+
+    const prelevements = findClickableByLooseText("consulter mes prelevements")
+      || findClickableByLooseText("consulter mes prélèvements");
+    if (prelevements) {
+      realClick(prelevements);
+      await wait(1000);
+    }
+
+    const downloadAttestation = pick(["#label-download"]) || findClickableByLooseText("telecharger mes attestations de prelevements")
+      || findClickableByLooseText("télécharger mes attestations de prélèvements");
+    if (downloadAttestation) {
+      realClick(downloadAttestation);
+      await wait(800);
+    }
+
+    const exactPeriodInput = pick([
+      "ul.dropdown-menu input[name='period'][value='3']",
+      "input[name='period'][value='3']"
+    ]);
+    if (exactPeriodInput) {
+      selectNavigoPeriodInput(exactPeriodInput);
+      await wait(400);
+    } else {
+      const dropDown = pick([
+        "select",
+        "button[aria-haspopup='listbox']",
+        "div[role='combobox']",
+        "input[role='combobox']"
+      ]);
+      if (dropDown) {
+        await selectNavigoLastThreeMonths(dropDown);
+        await wait(600);
+      } else {
+        const optionByText = findClickableByLooseText("3 derniers mois");
+        if (optionByText) {
+          realClick(optionByText);
+          await wait(800);
+        }
+      }
+    }
+
+    const explicitButton = pick([
+      "button#download-certificate-btn",
+      ".dropdown-menu #download-certificate-btn"
+    ]);
+    if (explicitButton) {
+      // Ensure button is enabled after the 3-month period is selected.
+      if (explicitButton.disabled) {
+        const periodInput = pick(["input[name='period'][value='3']"]);
+        if (periodInput) {
+          selectNavigoPeriodInput(periodInput);
+          await wait(400);
+        }
+      }
+      if (!explicitButton.disabled) {
+        return true;
+      }
+    }
+
+    const hasDownloadLink = Boolean(
+      document.querySelector("a[href*='attestation'][href*='prelevement']")
+      || document.querySelector("a[href*='attestation'][href*='pdf']")
+      || document.querySelector("a[href*='prelevement'][href*='pdf']")
+    );
+    if (hasDownloadLink) return true;
+
+    if ((findByLooseText("3 derniers mois")) && hasNavigoPrelevementsEntry()) {
+      return true;
+    }
+    await wait(250);
+  }
+  return false;
+}
+
+function selectNavigoPeriodInput(input) {
+  if (!input) return;
+  try {
+    input.checked = true;
+  } catch (_error) {
+    // noop
+  }
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.dispatchEvent(new Event("change", { bubbles: true }));
+  const label = input.closest("label");
+  if (label && isVisible(label)) {
+    realClick(label);
+  } else if (isVisible(input)) {
+    realClick(input);
+  }
+}
+
+function hasNavigoAnnualActiveEntry() {
+  return Boolean(findNavigoAnnualActiveEntry());
+}
+
+function hasNavigoPrelevementsEntry() {
+  return Boolean(
+    findByLooseText("consulter mes prelevements")
+    || findByLooseText("consulter mes prélèvements")
+    || findByLooseText("telecharger mes attestations de prelevements")
+    || findByLooseText("télécharger mes attestations de prélèvements")
+  );
+}
+
+function findNavigoAnnualActiveEntry() {
+  const links = Array.from(document.querySelectorAll("a[href]")).filter(isVisible);
+  return links.find((link) => {
+    const text = normalizeComparableText(link.textContent || "");
+    const href = String(link.getAttribute("href") || "");
+    return text.includes("navigo annuel") && text.includes("actif") && /\/espace_client\/detail\//.test(href);
+  }) || null;
+}
+
+function findNavigoAnnualContractIdFromList() {
+  const links = Array.from(document.querySelectorAll("a[href*='/espace_client/detail/']"));
+  const annualActive = links.find((link) => {
+    const text = normalizeComparableText(link.textContent || "");
+    return text.includes("navigo annuel") && text.includes("actif");
+  });
+  if (annualActive) {
+    const href = String(annualActive.getAttribute("href") || "");
+    const match = href.match(/\/espace_client\/detail\/([^/?#]+)/i);
+    if (match?.[1]) return match[1];
+  }
+
+  const anyNavigoAnnual = links.find((link) => normalizeComparableText(link.textContent || "").includes("navigo annuel"));
+  if (anyNavigoAnnual) {
+    const href = String(anyNavigoAnnual.getAttribute("href") || "");
+    const match = href.match(/\/espace_client\/detail\/([^/?#]+)/i);
+    if (match?.[1]) return match[1];
+  }
+
+  return null;
+}
+
+async function selectNavigoLastThreeMonths(dropDown) {
+  const tag = String(dropDown.tagName || "").toLowerCase();
+  if (tag === "select") {
+    const option = Array.from(dropDown.options || []).find((opt) => normalizeComparableText(opt.textContent || "").includes("3 derniers mois"));
+    if (option) {
+      dropDown.value = option.value;
+      dropDown.dispatchEvent(new Event("change", { bubbles: true }));
+      return;
+    }
+  }
+
+  realClick(dropDown);
+  await wait(300);
+  const optionByText = findClickableByLooseText("3 derniers mois");
+  if (optionByText) {
+    realClick(optionByText);
+  }
 }
 
 function findLinkByText(words) {
@@ -682,9 +1028,38 @@ function isOrangeAuthenticated() {
 function isProviderAuthenticated(provider) {
   if (provider === "orange_provider") return isOrangeAuthenticated();
   if (provider === "free_mobile_provider") return isFreeMobileAuthenticated();
+  if (provider === "navigo_provider") return isNavigoAuthenticated();
   const loginSelectors = getProviderLoginSelectors(provider);
   const hasLoginField = Boolean(queryWithin(document, loginSelectors.username) || queryWithin(document, loginSelectors.password));
   return !hasLoginField;
+}
+
+function isNavigoAuthenticated() {
+  const host = String(location.hostname || "");
+  if (!host.includes("iledefrance-mobilites.fr")) return false;
+
+  const hasLoginFields = Boolean(
+    document.querySelector("#id-Mail")
+    || document.querySelector("#id-pwd")
+    || document.querySelector("#form-log")
+  );
+  if (hasLoginFields) return false;
+
+  const path = String(location.pathname || "");
+  const inMonEspace = host.includes("mon-espace.iledefrance-mobilites.fr");
+  const inJeGereMaCarte = host.includes("jegeremacartenavigo.iledefrance-mobilites.fr");
+  const onLoginPath = /\/auth\/realms\/connect\/login-actions\/authenticate/.test(path);
+  if (onLoginPath) return false;
+
+  const text = normalizeComparableText(document.body?.textContent || "");
+  const hasAuthenticatedMarker = (
+    text.includes("mon espace personnel")
+    || text.includes("mon navigo")
+    || text.includes("mes services")
+    || text.includes("deconnexion")
+    || text.includes("déconnexion")
+  );
+  return (inMonEspace || inJeGereMaCarte) && hasAuthenticatedMarker;
 }
 
 function isFreeMobileAuthenticated() {
@@ -809,6 +1184,43 @@ function normalizeText(value) {
     .toLowerCase()
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function normalizeComparableText(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function getCurrentMonthStartISO() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  return `${year}-${month}-01`;
+}
+
+function summarizeNavigoPageDiagnostics() {
+  const text = normalizeComparableText(document.body?.textContent || "");
+  const anchors = Array.from(document.querySelectorAll("a[href],button,[role='button']"))
+    .map((node) => {
+      const label = normalizeComparableText(node.textContent || "").slice(0, 80);
+      const href = node.getAttribute?.("href") || "";
+      return `${label}${href ? ` -> ${href}` : ""}`;
+    })
+    .filter((line) => line.includes("navigo") || line.includes("prelev") || line.includes("attestation") || line.includes("facture") || line.includes("justificatif"))
+    .slice(0, 20);
+
+  return [
+    `href=${location.href}`,
+    `path=${location.pathname}`,
+    `hasMonNavigoText=${text.includes("mon navigo")}`,
+    `hasPrelevementsText=${text.includes("prelevement") || text.includes("prélèvement")}`,
+    `hasAttestationsText=${text.includes("attestation")}`,
+    `candidates=[${anchors.join(" | ")}]`
+  ].join(" ");
 }
 
 function parseFilenameFromContentDisposition(value) {
