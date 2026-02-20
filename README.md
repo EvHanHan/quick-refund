@@ -1,13 +1,11 @@
 # Quick-refund Navan Chrome Extension (MV3)
 
 Private unpacked Chrome extension that:
-1. Prompts Orange credentials at runtime.
-2. Logs into Orange and navigates billing.
+1. asks credentials about your mobile or internet provider
+2. Logs into the provider and navigates billing.
 3. Downloads/extracts the billing document file.
 4. Opens Navan and pauses for user Google SSO.
-5. Navigates to Liquid home and clicks `New Transaction`.
-6. Uploads the bill document so Navan auto-imports the transaction data.
-7. Stops at review.
+5. Navigates to update page where you can drag and drop to create a trasaction
 
 ## Security defaults
 - Passwords are not written to storage and are held only in memory during a run.
