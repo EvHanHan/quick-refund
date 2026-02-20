@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Internet Provider to Navan</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main>
+      <h1>Internet Provider to Navan</h1>
+      <p class="notice">Credentials are used only for this run and stored 30 mins in your browser.</p>
+
+      <label>
+        Internet Provider
+        <select id="Provider">
+          <option value="orange_provider">Orange</option>
+          <option value="bouygues_provider">Bouygues</option>
+          <option value="sfr_provider">SFR</option>
+          <option value="redbysfr_provider">Red by SFR</option>
+          <option value="free_provider">Free</option>
+          <option value="free_mobile_provider">Free Mobile</option>
+        </select>
+      </label>
+
+      <label>
+        Username
+        <input id="Username" type="text" autocomplete="off" />
+      </label>
+
+      <label>
+        Password
+        <input id="Password" type="password" autocomplete="off" />
+      </label>
+
+      <label>
+        Billing type
+        <select id="AccountType">
+          <option value="home_internet">Home internet (Offre internet)</option>
+          <option value="mobile_internet">Mobile internet (Forfait mobile)</option>
+        </select>
+      </label>
+
+      <div class="actions">
+        <button id="startFlow">Start Flow</button>
+        <button id="resumeFlow" disabled>Resume</button>
+      </div>
+
+      <div id="instructionBanner" class="instruction hidden"></div>
+
+      <section>
+        <h2>Status</h2>
+        <div id="statusLine">Idle</div>
+        <div id="updateStatus">Update check: pending</div>
+        <pre id="eventLog"></pre>
+      </section>
+    </main>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

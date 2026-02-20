@@ -1,0 +1,47 @@
+{
+  "manifest_version": 3,
+  "name": "Internet Provider to Navan Billing Assistant",
+  "description": "Guided automation from Internet Provider billing download to Navan transaction draft. By le J",
+  "version": "0.4.0",
+  "permissions": ["storage", "scripting", "tabs", "activeTab", "alarms"],
+  "host_permissions": [
+    "https://www.orange.com/*",
+    "https://login.orange.fr/*",
+    "https://espace-client.orange.fr/*",
+    "https://*.sfr.fr/*",
+    "https://*.red-by-sfr.fr/*",
+    "https://*.bouyguestelecom.fr/*",
+    "https://*.free.fr/*",
+    "https://app.navan.com/*",
+    "https://accounts.google.com/*",
+    "https://raw.githubusercontent.com/*"
+  ],
+  "background": {
+    "service_worker": "src/background/service_worker.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "src/popup/popup.html",
+    "default_title": "Newtork Provider to Navan by le J"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.orange.com/*",
+        "https://login.orange.fr/*",
+        "https://espace-client.orange.fr/*",
+        "https://*.sfr.fr/*",
+        "https://*.red-by-sfr.fr/*",
+        "https://*.bouyguestelecom.fr/*",
+        "https://*.free.fr/*"
+      ],
+      "js": ["src/shared/providers.js", "src/shared/selectors.js", "src/content/orange.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://app.navan.com/*"],
+      "js": ["src/shared/selectors.js", "src/content/navan.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

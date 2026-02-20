@@ -1,0 +1,113 @@
+:root {
+  --bg: #f7f9fc;
+  --panel: #ffffff;
+  --text: #0b2239;
+  --muted: #526d82;
+  --primary: #0d6efd;
+  --primary-contrast: #ffffff;
+  --border: #dbe5ef;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 360px;
+  background: radial-gradient(circle at top right, #e8f0ff, #f7f9fc 50%);
+  color: var(--text);
+  font: 14px/1.4 "Segoe UI", Tahoma, sans-serif;
+}
+
+main {
+  padding: 14px;
+}
+
+h1 {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+
+h2 {
+  margin: 14px 0 8px;
+  font-size: 14px;
+}
+
+.notice {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+label {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+input,
+select {
+  width: 100%;
+  margin-top: 3px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 8px;
+  color: var(--text);
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.instruction {
+  margin-top: 10px;
+  border: 1px solid #ffcb47;
+  background: #fff6d9;
+  color: #5e4300;
+  border-radius: 6px;
+  padding: 9px 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.hidden {
+  display: none;
+}
+
+button {
+  border: 1px solid var(--primary);
+  background: var(--primary);
+  color: var(--primary-contrast);
+  border-radius: 6px;
+  padding: 7px 10px;
+  cursor: pointer;
+}
+
+button[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+#statusLine {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  border-radius: 6px;
+  padding: 8px;
+}
+
+#eventLog {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  border-radius: 6px;
+  min-height: 130px;
+  max-height: 220px;
+  overflow: auto;
+  margin: 8px 0 0;
+  padding: 8px;
+  font-size: 11px;
+  white-space: pre-wrap;
+}
