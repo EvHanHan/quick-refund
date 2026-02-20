@@ -285,6 +285,8 @@ async function navigateBilling(provider, payload) {
     if (!isProviderAuthenticated(provider)) {
       throw new Error("Navigo user is not authenticated");
     }
+    await waitForNavigoRoutingHints(4000);
+
     const prelevementsUrl = resolveNavigoPrelevementsUrl();
     if (prelevementsUrl) {
       return { navigated: true, detailUrl: prelevementsUrl };
@@ -314,15 +316,28 @@ async function navigateBilling(provider, payload) {
   return { navigated: true, detailUrl: location.href };
 }
 
+async function waitForNavigoRoutingHints(timeoutMs) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const hasDetailLink = Boolean(document.querySelector("a[href*='/espace_client/detail/']"));
+    const hasMonNavigo = Boolean(findNavigoAnchorByText("mon navigo"));
+    const onDetailPage = /\/espace_client\/detail\/[^/?#]+/i.test(String(location.pathname || ""));
+    const onPrelevementPage = /\/prelevements\/[^/?#]+/i.test(String(location.pathname || ""));
+    if (hasDetailLink || hasMonNavigo || onDetailPage || onPrelevementPage) return;
+    await wait(150);
+  }
+}
+
 async function downloadAndExtractBill(provider) {
   const providerSelectors = getProviderBillingSelectors(provider);
   const billing = providerSelectors || window.__EXT_SELECTORS__.providerDefaults.billing;
   const beforeResources = new Set(performance.getEntriesByType("resource").map((entry) => entry.name));
-  const downloadControl = provider === "free_provider"
+    const isNavigo = provider === "navigo_provider";
+    const downloadControl = provider === "free_provider"
     ? await findBestFreeInvoiceControl(billing.downloadButton, 12000)
     : provider === "free_mobile_provider"
       ? await findBestFreeMobileInvoiceControl(billing, 12000)
-    : provider === "navigo_provider"
+    : isNavigo
       ? await findBestNavigoInvoiceControl(billing, 20000)
     : await waitForVisible(billing.downloadButton, 12000);
   if (!downloadControl) {
@@ -330,12 +345,14 @@ async function downloadAndExtractBill(provider) {
   }
 
   let didClickControl = false;
-  let href = resolveDownloadUrl(downloadControl, beforeResources);
-  if (!href) {
+  let href = isNavigo ? null : resolveDownloadUrl(downloadControl, beforeResources);
+  if (!href || isNavigo) {
     realClick(downloadControl);
     didClickControl = true;
     // Do not wait for physical download completion. Continue flow immediately.
-    href = await waitForDownloadUrl(downloadControl, beforeResources, 8000);
+    href = isNavigo
+      ? await waitForNavigoDownloadUrl(beforeResources, 8000)
+      : await waitForDownloadUrl(downloadControl, beforeResources, 8000);
   }
 
   const fileName = deriveFileName(provider, href || location.href, "application/pdf", "");
@@ -357,7 +374,7 @@ async function downloadAndExtractBill(provider) {
       dataUrl: null,
       sourceUrl: href,
       manualUploadRequired: true,
-      navanHints: provider === "navigo_provider"
+      navanHints: isNavigo
         ? {
           expenseType: "commuter benefits",
           transactionDateISO: getCurrentMonthStartISO()
@@ -681,24 +698,8 @@ async function findBestNavigoInvoiceControl(billingSelectors, timeoutMs) {
     "button#download-certificate-btn",
     ".dropdown-menu #download-certificate-btn"
   ]);
-  if (explicitButton) return explicitButton;
-
-  const forcedSelectors = [
-    "a[href*='attestation'][href*='prelevement'][href*='download']",
-    "a[href*='attestation'][href*='prelevement']",
-    "a[href*='attestation'][href*='pdf']",
-    "a[href*='prelevement'][href*='pdf']"
-  ];
-  const scoped = (billingSelectors?.downloadButton && Array.isArray(billingSelectors.downloadButton))
-    ? billingSelectors.downloadButton
-    : [];
-  const selectors = [...forcedSelectors, ...scoped];
-  const control = await waitForVisible(selectors, 8000);
-  if (control) return control;
-
-  const looseControl = findClickableByLooseText("telecharger mes attestations")
-    || findClickableByLooseText("télécharger mes attestations");
-  return looseControl || null;
+  if (explicitButton && !explicitButton.disabled) return explicitButton;
+  return null;
 }
 
 async function openNavigoAttestationFlow(timeoutMs) {
@@ -1048,8 +1049,8 @@ function isNavigoAuthenticated() {
   const path = String(location.pathname || "");
   const inMonEspace = host.includes("mon-espace.iledefrance-mobilites.fr");
   const inJeGereMaCarte = host.includes("jegeremacartenavigo.iledefrance-mobilites.fr");
-  const onLoginPath = /\/auth\/realms\/connect\/login-actions\/authenticate/.test(path);
-  if (onLoginPath) return false;
+      const onLoginPath = /\/auth\/realms\/connect\/login-actions\/authenticate/.test(path);
+      if (onLoginPath) return false;
 
   const text = normalizeComparableText(document.body?.textContent || "");
   const hasAuthenticatedMarker = (
@@ -1299,6 +1300,20 @@ async function waitForDownloadUrl(downloadControl, beforeResources, timeoutMs) {
   while (Date.now() - start < timeoutMs) {
     const href = resolveDownloadUrl(downloadControl, beforeResources) || queryDownloadCandidateFromPage() || null;
     if (href) return href;
+    await wait(200);
+  }
+  return null;
+}
+
+async function waitForNavigoDownloadUrl(beforeResources, timeoutMs) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const entries = performance.getEntriesByType("resource");
+    const fresh = entries
+      .map((entry) => entry.name)
+      .filter((name) => !beforeResources.has(name))
+      .find((name) => /prelev|pr[eé]lev|attestation|certificate|pdf/i.test(name));
+    if (fresh) return fresh;
     await wait(200);
   }
   return null;

@@ -105,7 +105,7 @@ function renderResponse(response) {
 
   const events = data.events || [];
   eventLog.textContent = events
-    .slice(-8)
+    .slice(-50)
     .map((event) => `${event.timestamp} | ${event.state} | ${event.status} | ${event.details || ""}`)
     .join("\n");
 }
