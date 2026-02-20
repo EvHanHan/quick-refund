@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Internet Provider to Navan Billing Assistant",
+  "name": "1-click navan refund",
   "description": "Guided automation from Internet Provider billing download to Navan transaction draft. By le J",
   "version": "0.4.0",
   "permissions": ["storage", "scripting", "tabs", "activeTab", "alarms"],
@@ -22,7 +22,7 @@
   },
   "action": {
     "default_popup": "src/popup/popup.html",
-    "default_title": "Newtork Provider to Navan by le J"
+    "default_title": "1-click navan refund"
   },
   "content_scripts": [
     {

@@ -80,7 +80,7 @@ async function handleMessage(message) {
     case MessageType.START_FLOW:
       return startFlow(message.payload);
     case MessageType.RESUME_FLOW:
-      return resumeFlow();
+      return resumeFlow(message.payload || {});
     case MessageType.GET_STATUS:
       return { ok: true, data: getStatus() };
     case MessageType.CHECK_UPDATES:
@@ -101,15 +101,25 @@ async function startFlow(runConfig) {
     Provider: PROVIDER_CONFIGS[normalizedProvider] ? normalizedProvider : "orange_provider"
   };
 
-  emitEvent(FlowState.CAPTURE_ORANGE_CREDENTIALS, FlowStatus.SUCCESS, "Credentials captured for this run");
+  const hasPassword = Boolean(flowContext.runConfig.Password);
+  emitEvent(
+    FlowState.CAPTURE_ORANGE_CREDENTIALS,
+    FlowStatus.SUCCESS,
+    hasPassword ? "Credentials captured for this run" : "Credentials captured for this run (autofill/manual login mode)"
+  );
   resetInactivityTimer();
   runStateMachine().catch((error) => failFlow(error));
   return { ok: true, data: getStatus() };
 }
 
-async function resumeFlow() {
+async function resumeFlow(payload) {
   if (!flowContext.waitingForUser) {
     return { ok: false, error: { code: ErrorCode.UNKNOWN, message: "Flow is not waiting for user input" } };
+  }
+
+  if (flowContext.waitingReason === "PROVIDER_MANUAL_LOGIN" && typeof payload?.Password === "string" && payload.Password.trim()) {
+    flowContext.runConfig.Password = payload.Password;
+    flowContext.status = FlowStatus.RETRY;
   }
 
   flowContext.waitingForUser = false;
@@ -169,6 +179,7 @@ async function runStep(state) {
           Provider: flowContext.runConfig.Provider
         }, TIMEOUTS_MS.DEFAULT);
         if (session?.authenticated) {
+          clearRunPassword();
           emitEvent(FlowState.AUTH_ORANGE, FlowStatus.SUCCESS, `${flowContext.runConfig.Provider} session already active, skipping login`);
           return;
         }
@@ -185,13 +196,15 @@ async function runStep(state) {
           emitEvent(
             FlowState.AUTH_ORANGE,
             FlowStatus.WAITING_USER,
-            "Click Connexion and complete login/captcha manually. The flow will continue automatically once billing page is detected."
+            "Finish login in provider tab (autofill/password manager/manual). If needed, enter password in popup and click Resume."
           );
           startProviderLoginWatcher();
         } else if (authResult?.captchaRequired) {
           flowContext.waitingForUser = true;
           flowContext.waitingReason = "ORANGE_CAPTCHA";
           emitEvent(FlowState.AUTH_ORANGE, FlowStatus.WAITING_USER, "Captcha detected on provider. Solve it in the tab, then click Resume.");
+        } else {
+          clearRunPassword();
         }
       }
       return;
@@ -459,6 +472,11 @@ function clearFlow() {
     clearTimeout(flowContext.inactivityTimer);
     flowContext.inactivityTimer = null;
   }
+}
+
+function clearRunPassword() {
+  if (!flowContext.runConfig) return;
+  flowContext.runConfig.Password = "";
 }
 
 function resetInactivityTimer() {

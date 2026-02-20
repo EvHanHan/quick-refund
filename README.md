@@ -8,11 +8,13 @@
 
 ## How to use? 
 1. Open the extension
-2. Enter your provider credentials, choose **Home internet** or **Mobile internet**, then click **Start Flow**.
+2. Enter your provider username, choose **Home internet** or **Mobile internet**, then click **Start Flow**.
+3. On provider login, use Chrome autofill/password manager or login manually.
+4. If login is not completed automatically, enter password in popup and click **Resume**.
 
 ### How to handle exception
-4. If the provider shows a captcha, solve it in the webpage then comes back to click **Resume**.
-5. Complete Google SSO in Navan when prompted, then click **Resume**.
+1. If the provider shows a captcha, solve it in the webpage then come back to click **Resume**.
+2. Complete Google SSO in Navan when prompted, then click **Resume**.
 
 ## Technical flow 
 Private unpacked Chrome extension that:
@@ -23,7 +25,9 @@ Private unpacked Chrome extension that:
 5. Navigates to update page where you can drag and drop to create a trasaction
 
 ## Security defaults
-- Passwords are not written to storage and are held only in memory during a run.
+- Password is never written to `chrome.storage.local`.
+- Legacy cached passwords are purged from prior versions.
+- Password is kept in memory only for the active run and cleared after provider authentication.
 - Flow state is cleared after completion/failure or 15 minutes inactivity.
 - User manually performs final submit in Navan.
 

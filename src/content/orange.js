@@ -63,6 +63,9 @@ function checkProviderBillingReady(provider) {
 }
 
 async function authProvider(provider, payload) {
+  const providedPassword = String(payload?.password || "");
+  const hasProvidedPassword = providedPassword.length > 0;
+
   if (isProviderAuthenticated(provider)) {
     return { authenticated: true, skippedLogin: true, captchaRequired: false };
   }
@@ -70,12 +73,12 @@ async function authProvider(provider, payload) {
   if (provider === "redbysfr_provider") {
     const s = getProviderLoginSelectors(provider);
     const username = await waitForVisible(s.username, 6000);
-    if (username) {
+    if (username && payload.username) {
       setInputValue(username, payload.username || "");
     }
     const password = await waitForVisible(s.password, 6000);
-    if (password) {
-      setInputValue(password, payload.password || "");
+    if (password && hasProvidedPassword) {
+      setInputValue(password, providedPassword);
     }
 
     // Red by SFR often shows captcha; user must login manually.
@@ -92,16 +95,23 @@ async function authProvider(provider, payload) {
       throw new Error("Could not locate Free Mobile username field");
     }
 
-    setInputValue(username, payload.username || "");
+    if (payload.username) {
+      setInputValue(username, payload.username || "");
+    }
     const password = await waitForVisible(s.password, 8000);
     if (!password) {
       throw new Error("Could not locate Free Mobile password field");
     }
-    setInputValue(password, payload.password || "");
+    if (hasProvidedPassword) {
+      setInputValue(password, providedPassword);
+    }
 
     const submit = pick(s.submit);
     if (!submit) {
       throw new Error("Could not locate Free Mobile login button");
+    }
+    if (!hasProvidedPassword && !hasInputValue(password)) {
+      return { authenticated: false, manualLoginRequired: true, captchaRequired: false };
     }
     realClick(submit);
 
@@ -130,7 +140,9 @@ async function authProvider(provider, payload) {
     throw new Error("Could not locate provider username field");
   }
 
-  setInputValue(username, payload.username || "");
+  if (payload.username) {
+    setInputValue(username, payload.username || "");
+  }
 
   // Some providers (ex: Free) expose username+password on the same form.
   let password = pick(s.password);
@@ -145,7 +157,13 @@ async function authProvider(provider, payload) {
     throw new Error("Could not locate provider password field after username step");
   }
 
-  setInputValue(password, payload.password || "");
+  if (hasProvidedPassword) {
+    setInputValue(password, providedPassword);
+  }
+
+  if (!hasProvidedPassword && !hasInputValue(password)) {
+    return { authenticated: false, manualLoginRequired: true, captchaRequired: false };
+  }
   const finalSubmit = pick(s.submit);
   if (!finalSubmit) {
     throw new Error("Could not locate provider submit button");
@@ -461,6 +479,12 @@ function setInputValue(input, value) {
   }
 
   input.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+function hasInputValue(input) {
+  if (!input) return false;
+  const value = typeof input.value === "string" ? input.value : input.getAttribute("value");
+  return String(value || "").trim().length > 0;
 }
 
 function normalizeUrl(href) {

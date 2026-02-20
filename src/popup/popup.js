@@ -15,7 +15,6 @@ const AccountTypeInput = document.getElementById("AccountType");
 const ProviderInput = document.getElementById("Provider");
 
 UsernameInput.addEventListener("input", persistLoginDraft);
-PasswordInput.addEventListener("input", persistLoginDraft);
 AccountTypeInput.addEventListener("change", persistLoginDraft);
 ProviderInput.addEventListener("change", persistLoginDraft);
 window.addEventListener("beforeunload", persistLoginDraft);
@@ -26,14 +25,13 @@ startButton.addEventListener("click", async () => {
   const AccountType = AccountTypeInput.value;
   const Provider = ProviderInput.value;
 
-  if (!Username || !Password) {
-    statusLine.textContent = "Username and password are required.";
+  if (!Username) {
+    statusLine.textContent = "Username is required.";
     return;
   }
 
   await saveLoginCache({
     Username,
-    Password,
     AccountType,
     Provider
   });
@@ -57,7 +55,12 @@ startButton.addEventListener("click", async () => {
 
 resumeButton.addEventListener("click", async () => {
   resumeButton.disabled = true;
-  const response = await sendMessage({ type: MessageType.RESUME_FLOW });
+  const response = await sendMessage({
+    type: MessageType.RESUME_FLOW,
+    payload: {
+      Password: PasswordInput.value
+    }
+  });
   renderResponse(response);
 });
 
@@ -156,7 +159,6 @@ async function loadLoginCacheIntoForm() {
   if (!cached) return;
 
   UsernameInput.value = cached.Username || "";
-  PasswordInput.value = cached.Password || "";
   AccountTypeInput.value = cached.AccountType || "home_internet";
   const provider = cached.Provider === "freemobile_provider" ? "free_mobile_provider" : cached.Provider;
   ProviderInput.value = provider || "orange_provider";
@@ -180,14 +182,25 @@ async function readLoginCache() {
     return null;
   }
 
+  // Purge legacy password fields from old cache schema.
+  if (Object.prototype.hasOwnProperty.call(cached, "Password")) {
+    const cleaned = {
+      Username: String(cached.Username || "").trim(),
+      AccountType: cached.AccountType === "mobile_internet" ? "mobile_internet" : "home_internet",
+      Provider: String(cached.Provider || ""),
+      expiresAt: cached.expiresAt
+    };
+    await chrome.storage.local.set({ [LOGIN_CACHE_KEY]: cleaned });
+    return cleaned;
+  }
+
   return cached;
 }
 
 function persistLoginDraft() {
   const Username = UsernameInput.value.trim();
-  const Password = PasswordInput.value;
   const AccountType = AccountTypeInput.value;
   const Provider = ProviderInput.value;
-  if (!Username && !Password) return;
-  void saveLoginCache({ Username, Password, AccountType, Provider });
+  if (!Username) return;
+  void saveLoginCache({ Username, AccountType, Provider });
 }
