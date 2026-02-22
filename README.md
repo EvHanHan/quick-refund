@@ -21,7 +21,7 @@ https://youtu.be/dusQxY_aq6s
 2. Complete Google SSO in Navan when prompted, then click **Resume**.
 
 ## How does it work? 
-Private unpacked Chrome extension that:
+The chrome extension: 
 1. asks credentials about your mobile or internet provider
 2. Logs into the provider and navigates billing.
 3. Downloads/extracts the billing document file.
