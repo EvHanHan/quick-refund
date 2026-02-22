@@ -10,7 +10,6 @@ const updateStatusLine = document.getElementById("updateStatus");
 const eventLog = document.getElementById("eventLog");
 const instructionBanner = document.getElementById("instructionBanner");
 const UsernameInput = document.getElementById("Username");
-const PasswordInput = document.getElementById("Password");
 const AccountTypeInput = document.getElementById("AccountType");
 const ProviderInput = document.getElementById("Provider");
 const DEFAULT_BILLING_OPTIONS = [
@@ -34,7 +33,6 @@ window.addEventListener("beforeunload", persistLoginDraft);
 
 startButton.addEventListener("click", async () => {
   const Username = UsernameInput.value.trim();
-  const Password = PasswordInput.value;
   const AccountType = AccountTypeInput.value;
   const Provider = ProviderInput.value;
 
@@ -56,7 +54,6 @@ startButton.addEventListener("click", async () => {
     type: MessageType.START_FLOW,
     payload: {
       Username,
-      Password,
       AccountType,
       Provider
     }
@@ -70,9 +67,7 @@ resumeButton.addEventListener("click", async () => {
   resumeButton.disabled = true;
   const response = await sendMessage({
     type: MessageType.RESUME_FLOW,
-    payload: {
-      Password: PasswordInput.value
-    }
+    payload: {}
   });
   renderResponse(response);
 });

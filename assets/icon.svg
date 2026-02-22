@@ -6,12 +6,14 @@
       .fill { fill: #1E64D4; }
     </style>
   </defs>
+  <rect width="128" height="128" fill="#FFFFFF" />
   <!-- Receipt outline -->
-  <path class="stroke" d="M32 16 H96 V104 L88 96 L80 104 L72 96 L64 104 L56 96 L48 104 L40 96 L32 104 Z"/>
-  <!-- Receipt lines -->
-  <path class="stroke" d="M44 36 H84"/>
-  <path class="stroke" d="M44 52 H76"/>
-  <!-- Checkmark in circle -->
-  <circle class="stroke" cx="86" cy="78" r="16"/>
-  <path class="stroke" d="M80 78 L84 82 L92 74"/>
+  <path class="stroke" d="M28 16 H88 V100 L82 94 L76 100 L70 94 L64 100 L58 94 L52 100 L46 94 L40 100 L34 94 L28 100 Z"/>
+  <!-- Receipt bullets/lines -->
+  <circle class="fill" cx="42" cy="36" r="4" />
+  <circle class="fill" cx="42" cy="54" r="4" />
+  <path class="stroke" d="M52 36 H78"/>
+  <path class="stroke" d="M52 54 H74"/>
+  <!-- Dollar sign -->
+  <text x="86" y="96" font-size="52" font-family="Arial, sans-serif" font-weight="700" fill="#1E64D4">$</text>
 </svg>
