@@ -29,9 +29,6 @@ The chrome extension:
 5. Navigates to update page where you can drag and drop to create a trasaction
 
 ## Security defaults
-- Password is never written to `chrome.storage.local`.
-- Legacy cached passwords are purged from prior versions.
-- Password is kept in memory only for the active run and cleared after provider authentication.
 - Flow state is cleared after completion/failure or 15 minutes inactivity.
 - User manually performs final submit in Navan.
 
@@ -44,6 +41,3 @@ The chrome extension:
 ```bash
 npm test
 ```
-
-## Support 
-Slack: Han Han
