@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "1-click navan refund",
-  "description": "Guided automation from Internet Provider billing download to Navan transaction draft. By le J",
+  "description": "1-click invoice download and Navan expense submission.",
   "version": "0.4.0",
   "permissions": ["storage", "scripting", "tabs", "activeTab", "alarms"],
   "host_permissions": [
@@ -24,6 +24,12 @@
   "action": {
     "default_popup": "src/popup/popup.html",
     "default_title": "1-click navan refund"
+  },
+  "icons": {
+    "16": "assets/icon-16.png",
+    "32": "assets/icon-32.png",
+    "48": "assets/icon-48.png",
+    "128": "assets/icon-128.png"
   },
   "content_scripts": [
     {

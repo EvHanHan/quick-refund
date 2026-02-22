@@ -14,8 +14,11 @@ const PasswordInput = document.getElementById("Password");
 const AccountTypeInput = document.getElementById("AccountType");
 const ProviderInput = document.getElementById("Provider");
 const DEFAULT_BILLING_OPTIONS = [
-  { value: "home_internet", label: "Home internet (Offre internet)" },
-  { value: "mobile_internet", label: "Mobile internet (Forfait mobile)" }
+  { value: "home_internet", label: "Internet" },
+  { value: "mobile_internet", label: "Mobile" }
+];
+const FREE_MOBILE_BILLING_OPTIONS = [
+  { value: "mobile_internet", label: "Mobile" }
 ];
 const NAVIGO_BILLING_OPTIONS = [
   { value: "commuter_benefits", label: "Commuter Benefits" }
@@ -215,7 +218,11 @@ function persistLoginDraft() {
 }
 
 function syncBillingTypeOptions(provider, preferredValue) {
-  const options = provider === "navigo_provider" ? NAVIGO_BILLING_OPTIONS : DEFAULT_BILLING_OPTIONS;
+  const options = provider === "navigo_provider"
+    ? NAVIGO_BILLING_OPTIONS
+    : provider === "free_mobile_provider"
+      ? FREE_MOBILE_BILLING_OPTIONS
+      : DEFAULT_BILLING_OPTIONS;
   setBillingTypeOptions(options, preferredValue);
 }
 

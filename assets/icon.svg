@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <style>
+      .stroke { stroke: #1E64D4; stroke-width: 8; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+      .fill { fill: #1E64D4; }
+    </style>
+  </defs>
+  <!-- Receipt outline -->
+  <path class="stroke" d="M32 16 H96 V104 L88 96 L80 104 L72 96 L64 104 L56 96 L48 104 L40 96 L32 104 Z"/>
+  <!-- Receipt lines -->
+  <path class="stroke" d="M44 36 H84"/>
+  <path class="stroke" d="M44 52 H76"/>
+  <!-- Checkmark in circle -->
+  <circle class="stroke" cx="86" cy="78" r="16"/>
+  <path class="stroke" d="M80 78 L84 82 L92 74"/>
+</svg>
