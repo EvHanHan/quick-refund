@@ -4,9 +4,13 @@
 2. Unzip it
 4. Open your chome and open your extensions 
 2. Enable **Developer mode**.
-3. Click **Load unpacked** and select the unzip file.
+3. Click **Load unpacked** and select the unzipped file.
+4. You are ready to go 
 
 ## How to use? 
+Video demo: 
+https://youtu.be/dusQxY_aq6s
+
 1. Open the extension
 2. Enter your provider username, choose **Home internet** or **Mobile internet**, then click **Start Flow**.
 3. On provider login, use Chrome autofill/password manager or login manually.
@@ -16,7 +20,7 @@
 1. If the provider shows a captcha, solve it in the webpage then come back to click **Resume**.
 2. Complete Google SSO in Navan when prompted, then click **Resume**.
 
-## Technical flow 
+## How does it work? 
 Private unpacked Chrome extension that:
 1. asks credentials about your mobile or internet provider
 2. Logs into the provider and navigates billing.
@@ -30,6 +34,9 @@ Private unpacked Chrome extension that:
 - Password is kept in memory only for the active run and cleared after provider authentication.
 - Flow state is cleared after completion/failure or 15 minutes inactivity.
 - User manually performs final submit in Navan.
+
+## Support 
+Slack: Han Han
 
 ## Notes
 - Selectors are best-effort and should be hardened against your tenant-specific UI.
