@@ -35,8 +35,6 @@ The chrome extension:
 - Flow state is cleared after completion/failure or 15 minutes inactivity.
 - User manually performs final submit in Navan.
 
-## Support 
-Slack: Han Han
 
 ## Notes
 - Selectors are best-effort and should be hardened against your tenant-specific UI.
@@ -46,3 +44,6 @@ Slack: Han Han
 ```bash
 npm test
 ```
+
+## Support 
+Slack: Han Han
