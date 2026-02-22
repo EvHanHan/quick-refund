@@ -18,7 +18,6 @@
     return true;
   });
 
-  console.log("[Navan] Content script loaded on", location.pathname);
   setupNavanRouteWatcher();
   scheduleAutoFillOnForm();
 })();
@@ -178,9 +177,7 @@ function scheduleAutoFillOnForm() {
   if (!isNavanTransactionFormPage()) {
     return;
   }
-  console.log("[Navan] scheduleAutoFillOnForm invoked on", location.pathname);
   if (window.__NAVAN_AUTOFILL_RUNNING || window.__NAVAN_AUTOFILL_DONE) {
-    console.log("[Navan] Autofill already running/done");
     return;
   }
   window.__NAVAN_AUTOFILL_RUNNING = true;
@@ -194,14 +191,12 @@ function scheduleAutoFillOnForm() {
     if (ready) {
       window.__NAVAN_AUTOFILL_DONE = true;
       window.__NAVAN_AUTOFILL_RUNNING = false;
-      console.log("[Navan] Autofill completed");
       return;
     }
     if (Date.now() - start < maxWaitMs) {
       setTimeout(tick, pollMs);
     } else {
       window.__NAVAN_AUTOFILL_RUNNING = false;
-      console.log("[Navan] Autofill timed out");
     }
   };
 
@@ -256,47 +251,37 @@ function setupNavanDomWatcher() {
 }
 
 async function tryAutoFillExpenseThenDescription() {
-  console.log("[Navan] Autofill: starting expense type selection");
   const expenseSelected = await ensureExpenseTypeSelected("work from home");
-  console.log("[Navan] Autofill: expense type selected =", expenseSelected);
   if (!expenseSelected) return false;
 
   const descriptionInput = await waitForCustomDescriptionInput(10_000);
-  console.log("[Navan] Autofill: custom description input found =", Boolean(descriptionInput));
   if (!descriptionInput) return false;
 
   setInputValue(descriptionInput, "monthly invoice");
-  console.log("[Navan] Autofill: description set");
   return true;
 }
 
 async function ensureExpenseTypeSelected(expenseTypeLabel) {
   const input = findExpenseTypeInput();
-  console.log("[Navan] Expense type input found =", Boolean(input));
   if (!input) return false;
 
   const current = normalizeComparableText(input.value || "");
-  console.log("[Navan] Expense type current value =", current);
   if (current.includes("work from home") || current.includes("teletravail")) {
     return true;
   }
 
   openExpenseTypeDropdown(input);
   await wait(200);
-  console.log("[Navan] Expense type dropdown opened");
   await scrollExpenseTypeListToEnd(3000);
-  console.log("[Navan] Expense type dropdown scrolled to end");
 
   const desired = normalizeComparableText(expenseTypeLabel || "");
   typeExpenseTypeQuery(input, expenseTypeLabel || "");
   const option = await waitForExpenseTypeOption(desired, 8000);
-  console.log("[Navan] Expense type option match found =", Boolean(option));
   if (!option) return false;
   realClick(option);
   await wait(400);
 
   const updated = normalizeComparableText(input.value || "");
-  console.log("[Navan] Expense type updated value =", updated);
   return updated.includes("work from home") || updated.includes("teletravail");
 }
 
