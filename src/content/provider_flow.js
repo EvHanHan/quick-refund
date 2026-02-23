@@ -77,156 +77,18 @@ function checkProviderBillingReady(provider) {
   };
 }
 
-async function authProvider(provider, payload) {
-  const providedPassword = String(payload?.password || "");
-  const hasProvidedPassword = providedPassword.length > 0;
-
+async function authProvider(provider, _payload) {
   if (isProviderAuthenticated(provider)) {
     return { authenticated: true, skippedLogin: true, captchaRequired: false };
   }
 
-  if (provider === "redbysfr_provider") {
-    const s = getProviderLoginSelectors(provider);
-    const username = await waitForVisible(s.username, 6000);
-    if (username && payload.username) {
-      setInputValue(username, payload.username || "");
-    }
-    const password = await waitForVisible(s.password, 6000);
-    if (password && hasProvidedPassword) {
-      setInputValue(password, providedPassword);
-    }
-
-    // Red by SFR often shows captcha; user must login manually.
-    return { authenticated: false, manualLoginRequired: true, captchaRequired: false };
-  }
-
   if (provider === "free_mobile_provider") {
-    const s = getProviderLoginSelectors(provider);
-    const username = await waitForVisible(s.username, 8000);
-    if (!username) {
-      if (isProviderAuthenticated(provider)) {
-        return { authenticated: true, skippedLogin: true, captchaRequired: false };
-      }
-      throw new Error(`Could not locate Free Mobile username field | ${summarizeFreeMobileDiagnostics()}`);
-    }
-
-    if (payload.username) {
-      setInputValue(username, payload.username || "");
-    }
-    const password = await waitForVisible(s.password, 8000);
-    if (!password) {
-      throw new Error(`Could not locate Free Mobile password field | ${summarizeFreeMobileDiagnostics()}`);
-    }
-    if (hasProvidedPassword) {
-      setInputValue(password, providedPassword);
-    }
-
-    const submit = pick(s.submit);
-    if (!submit) {
-      throw new Error(`Could not locate Free Mobile login button | ${summarizeFreeMobileDiagnostics()}`);
-    }
-    if (!hasProvidedPassword && !hasInputValue(password)) {
-      return { authenticated: false, manualLoginRequired: true, captchaRequired: false };
-    }
-    realClick(submit);
-
-    await wait(1200);
     if (isFreeMobileOtpRequired()) {
       return { authenticated: false, manualLoginRequired: true, smsCodeRequired: true };
     }
-    if (isProviderAuthenticated(provider)) {
-      return { authenticated: true, captchaRequired: false };
-    }
-
-    // If an extra challenge appears, wait for user and auto-resume via watcher on page change.
-    return { authenticated: false, manualLoginRequired: true, captchaRequired: false };
   }
 
-  if (provider === "navigo_provider") {
-    const s = getProviderLoginSelectors(provider);
-    const username = await waitForVisible(s.username, 8000);
-    if (!username) {
-      if (isProviderAuthenticated(provider)) {
-        return { authenticated: true, skippedLogin: true, captchaRequired: false };
-      }
-      throw new Error("Could not locate Navigo username field");
-    }
-
-    if (payload.username) {
-      setInputValue(username, payload.username || "");
-    }
-    const password = await waitForVisible(s.password, 8000);
-    if (!password) {
-      throw new Error("Could not locate Navigo password field");
-    }
-    if (hasProvidedPassword) {
-      setInputValue(password, providedPassword);
-    }
-
-    const submit = pick(s.submit);
-    if (!submit) {
-      throw new Error("Could not locate Navigo login button");
-    }
-    if (!hasProvidedPassword && !hasInputValue(password)) {
-      return { authenticated: false, manualLoginRequired: true, captchaRequired: false };
-    }
-    realClick(submit);
-    await wait(1200);
-    if (isProviderAuthenticated(provider)) {
-      return { authenticated: true, captchaRequired: false };
-    }
-    return { authenticated: false, manualLoginRequired: true, captchaRequired: false };
-  }
-
-  if (isCaptchaPresent()) {
-    return { authenticated: false, captchaRequired: true };
-  }
-
-  const s = getProviderLoginSelectors(provider);
-  const username = await waitForVisible(s.username, 8000);
-  if (!username) {
-    if (isProviderAuthenticated(provider)) {
-      return { authenticated: true, skippedLogin: true, captchaRequired: false };
-    }
-    throw new Error("Could not locate provider username field");
-  }
-
-  if (payload.username) {
-    setInputValue(username, payload.username || "");
-  }
-
-  // Some providers (ex: Free) expose username+password on the same form.
-  let password = pick(s.password);
-  if (!password) {
-    const firstSubmit = pick(s.submit);
-    firstSubmit?.click();
-    // Many providers use a 2-step auth flow: username page, then password page.
-    password = await waitForVisible(s.password, 10000);
-  }
-
-  if (!password) {
-    throw new Error("Could not locate provider password field after username step");
-  }
-
-  if (hasProvidedPassword) {
-    setInputValue(password, providedPassword);
-  }
-
-  if (!hasProvidedPassword && !hasInputValue(password)) {
-    return { authenticated: false, manualLoginRequired: true, captchaRequired: false };
-  }
-  const finalSubmit = pick(s.submit);
-  if (!finalSubmit) {
-    throw new Error("Could not locate provider submit button");
-  }
-  finalSubmit.click();
-
-  await wait(1500);
-  if (isCaptchaPresent()) {
-    return { authenticated: false, captchaRequired: true };
-  }
-
-  return { authenticated: true, captchaRequired: false };
+  return { authenticated: false, manualLoginRequired: true, captchaRequired: false };
 }
 
 async function navigateBilling(provider, payload) {

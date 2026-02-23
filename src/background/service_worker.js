@@ -99,17 +99,15 @@ async function startFlow(runConfig) {
   const normalizedProvider = normalizeProviderId(runConfig?.Provider);
   flowContext.startedAt = Date.now();
   flowContext.runConfig = {
-    Username: String(runConfig?.Username || "").trim(),
     Password: String(runConfig?.Password || ""),
     AccountType: runConfig?.AccountType === "mobile_internet" ? "mobile_internet" : "home_internet",
     Provider: PROVIDER_CONFIGS[normalizedProvider] ? normalizedProvider : "orange_provider"
   };
 
-  const hasPassword = Boolean(flowContext.runConfig.Password);
   emitEvent(
     FlowState.CAPTURE_ORANGE_CREDENTIALS,
     FlowStatus.SUCCESS,
-    hasPassword ? "Credentials captured for this run" : "Credentials captured for this run (autofill/manual login mode)"
+    "Flow settings captured for this run"
   );
   resetInactivityTimer();
   runStateMachine().catch((error) => failFlow(error));
@@ -215,10 +213,8 @@ async function runStep(state) {
           `Provider action AUTH_PROVIDER (provider=${flowContext.runConfig.Provider}, timeout=${TIMEOUTS_MS.DEFAULT}ms)`
         );
         const authResult = await runProviderAction("AUTH_PROVIDER", flowContext.orangeTabId, {
-        Provider: flowContext.runConfig.Provider,
-        username: flowContext.runConfig.Username,
-        password: flowContext.runConfig.Password
-      }, TIMEOUTS_MS.DEFAULT);
+          Provider: flowContext.runConfig.Provider
+        }, TIMEOUTS_MS.DEFAULT);
         emitEvent(
           FlowState.AUTH_ORANGE,
           FlowStatus.STARTED,
@@ -238,7 +234,7 @@ async function runStep(state) {
           emitEvent(
             FlowState.AUTH_ORANGE,
             FlowStatus.WAITING_USER,
-            "Finish login in provider tab (autofill/password manager/manual). If needed, enter password in popup and click Resume."
+            "Finish login in provider tab. The flow resumes automatically after provider login is detected."
           );
           startProviderLoginWatcher();
         } else if (authResult?.captchaRequired) {

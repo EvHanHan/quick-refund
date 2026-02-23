@@ -9,7 +9,6 @@ const statusLine = document.getElementById("statusLine");
 const updateStatusLine = document.getElementById("updateStatus");
 const eventLog = document.getElementById("eventLog");
 const instructionBanner = document.getElementById("instructionBanner");
-const UsernameInput = document.getElementById("Username");
 const AccountTypeInput = document.getElementById("AccountType");
 const ProviderInput = document.getElementById("Provider");
 const DEFAULT_BILLING_OPTIONS = [
@@ -23,7 +22,6 @@ const NAVIGO_BILLING_OPTIONS = [
   { value: "commuter_benefits", label: "Commuter Benefits" }
 ];
 
-UsernameInput.addEventListener("input", persistLoginDraft);
 AccountTypeInput.addEventListener("change", persistLoginDraft);
 ProviderInput.addEventListener("change", () => {
   syncBillingTypeOptions(ProviderInput.value, AccountTypeInput.value);
@@ -32,17 +30,10 @@ ProviderInput.addEventListener("change", () => {
 window.addEventListener("beforeunload", persistLoginDraft);
 
 startButton.addEventListener("click", async () => {
-  const Username = UsernameInput.value.trim();
   const AccountType = AccountTypeInput.value;
   const Provider = ProviderInput.value;
 
-  if (!Username) {
-    statusLine.textContent = "Username is required.";
-    return;
-  }
-
   await saveLoginCache({
-    Username,
     AccountType,
     Provider
   });
@@ -53,7 +44,6 @@ startButton.addEventListener("click", async () => {
   const response = await sendMessage({
     type: MessageType.START_FLOW,
     payload: {
-      Username,
       AccountType,
       Provider
     }
@@ -167,8 +157,6 @@ async function loadLoginCacheIntoForm() {
   const provider = cached?.Provider === "freemobile_provider" ? "free_mobile_provider" : cached?.Provider;
   ProviderInput.value = provider || "orange_provider";
   syncBillingTypeOptions(ProviderInput.value, cached?.AccountType);
-  if (!cached) return;
-  UsernameInput.value = cached.Username || "";
 }
 
 async function saveLoginCache(login) {
@@ -189,11 +177,18 @@ async function readLoginCache() {
     return null;
   }
 
-  // Purge legacy password fields from old cache schema.
-  if (Object.prototype.hasOwnProperty.call(cached, "Password")) {
+  // Purge legacy fields from old cache schema.
+  if (
+    Object.prototype.hasOwnProperty.call(cached, "Password")
+    || Object.prototype.hasOwnProperty.call(cached, "Username")
+  ) {
+    const legacyAccountType = cached.AccountType;
     const cleaned = {
-      Username: String(cached.Username || "").trim(),
-      AccountType: cached.AccountType === "mobile_internet" ? "mobile_internet" : "home_internet",
+      AccountType: legacyAccountType === "mobile_internet"
+        ? "mobile_internet"
+        : legacyAccountType === "commuter_benefits"
+          ? "commuter_benefits"
+          : "home_internet",
       Provider: String(cached.Provider || ""),
       expiresAt: cached.expiresAt
     };
@@ -205,11 +200,9 @@ async function readLoginCache() {
 }
 
 function persistLoginDraft() {
-  const Username = UsernameInput.value.trim();
   const AccountType = AccountTypeInput.value;
   const Provider = ProviderInput.value;
-  if (!Username) return;
-  void saveLoginCache({ Username, AccountType, Provider });
+  void saveLoginCache({ AccountType, Provider });
 }
 
 function syncBillingTypeOptions(provider, preferredValue) {

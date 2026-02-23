@@ -12,17 +12,17 @@ Video demo:
 https://youtu.be/dusQxY_aq6s
 
 1. Open the extension
-2. Enter your provider username, choose **Home internet** or **Mobile internet**, then click **Start Flow**.
-3. On provider login, use Chrome autofill/password manager or login manually.
-4. If login is not completed automatically, enter password in popup and click **Resume**.
+2. Choose your provider and billing type, then click **Start Flow**.
+3. On provider login, enter your username/password directly on the provider website.
+4. The flow resumes automatically after provider login is detected. If needed, click **Resume**.
 
 ### How to handle exception
 1. If the provider shows a captcha, solve it in the webpage then come back to click **Resume**.
 2. Complete Google SSO in Navan when prompted, then click **Resume**.
 
-## How does it work? 
-The chrome extension: 
-1. asks credentials about your mobile or internet provider
+## Technical flow 
+Private unpacked Chrome extension that:
+1. asks provider + billing type for your mobile or internet bill
 2. Logs into the provider and navigates billing.
 3. Downloads/extracts the billing document file.
 4. Opens Navan and pauses for user Google SSO.
