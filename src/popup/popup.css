@@ -40,6 +40,22 @@ h2 {
   font-size: 12px;
 }
 
+.share {
+  margin: -6px 0 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.share a {
+  color: var(--primary);
+  text-decoration: none;
+  font-weight: 700;
+}
+
+.share a:hover {
+  text-decoration: underline;
+}
+
 label {
   display: block;
   margin-bottom: 8px;
@@ -103,11 +119,11 @@ button[disabled] {
   border: 1px solid var(--border);
   background: var(--panel);
   border-radius: 6px;
-  min-height: 130px;
-  max-height: 220px;
+  height: 160px;
   overflow: auto;
   margin: 8px 0 0;
   padding: 8px;
   font-size: 11px;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
