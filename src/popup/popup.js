@@ -15,6 +15,9 @@ const DEFAULT_BILLING_OPTIONS = [
   { value: "home_internet", label: "Internet" },
   { value: "mobile_internet", label: "Mobile" }
 ];
+const FREE_BILLING_OPTIONS = [
+  { value: "home_internet", label: "Internet" }
+];
 const FREE_MOBILE_BILLING_OPTIONS = [
   { value: "mobile_internet", label: "Mobile" }
 ];
@@ -208,6 +211,8 @@ function persistLoginDraft() {
 function syncBillingTypeOptions(provider, preferredValue) {
   const options = provider === "navigo_provider"
     ? NAVIGO_BILLING_OPTIONS
+    : provider === "free_provider"
+      ? FREE_BILLING_OPTIONS
     : provider === "free_mobile_provider"
       ? FREE_MOBILE_BILLING_OPTIONS
       : DEFAULT_BILLING_OPTIONS;
