@@ -79,6 +79,23 @@
           downloadButton: ["button[data-e2e='download-link']", "a[data-e2e='download-link']", "button.btn.btn-primary"]
         }
       },
+      sosh_provider: {
+        login: {
+          username: [
+            "input[data-testid='input-login']",
+            "input#login",
+            "input[name='login']",
+            "input[aria-labelledby*='login-label']",
+            "input[type='email']"
+          ],
+          password: ["input[name='password']", "input[type='password']", "#password"],
+          submit: ["button[type='submit']", "button[name='submit']", "input[type='submit']"]
+        },
+        billing: {
+          accountItems: ["a.items-list-item[href*='/facture-paiement/']", "a[data-e2e][href*='/facture-paiement/']"],
+          downloadButton: ["button[data-e2e='download-link']", "a[data-e2e='download-link']", "button.btn.btn-primary"]
+        }
+      },
       redbysfr_provider: {
         login: {
           username: [

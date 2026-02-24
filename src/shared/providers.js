@@ -9,6 +9,14 @@
       hosts: ["orange.fr", "orange.com"],
       requiresContractSelection: true
     },
+    sosh_provider: {
+      id: "sosh_provider",
+      label: "Sosh",
+      loginUrl: "https://login.orange.fr/?service=sosh&return_url=https%3A%2F%2Fwww.sosh.fr%2F&propagation=true&domain=sosh&force_authent=true",
+      billingUrl: "https://espace-client.orange.fr/selectionner-un-contrat?returnUrl=%2Ffacture-paiement%2F%257B%257Bcid%257D%257D&marketType=RES",
+      hosts: ["sosh.fr", "orange.fr", "orange.com", "login.orange.fr", "espace-client.orange.fr"],
+      requiresContractSelection: true
+    },
     sfr_provider: {
       id: "sfr_provider",
       label: "SFR",

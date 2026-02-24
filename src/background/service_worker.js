@@ -12,6 +12,10 @@ const PROVIDER_CONFIGS = {
     loginUrl: "https://espace-client.orange.fr/selectionner-un-contrat?returnUrl=%2Ffacture-paiement%2F%257B%257Bcid%257D%257D&marketType=RES",
     billingUrl: "https://espace-client.orange.fr/selectionner-un-contrat?returnUrl=%2Ffacture-paiement%2F%257B%257Bcid%257D%257D&marketType=RES"
   },
+  sosh_provider: {
+    loginUrl: "https://login.orange.fr/?service=sosh&return_url=https%3A%2F%2Fwww.sosh.fr%2F&propagation=true&domain=sosh&force_authent=true",
+    billingUrl: "https://espace-client.orange.fr/selectionner-un-contrat?returnUrl=%2Ffacture-paiement%2F%257B%257Bcid%257D%257D&marketType=RES"
+  },
   sfr_provider: {
     loginUrl: "https://espace-client.sfr.fr/",
     billingUrl: "https://espace-client.sfr.fr/facture-conso"
@@ -317,6 +321,14 @@ async function runStep(state) {
         FlowStatus.STARTED,
         `Provider action DOWNLOAD_AND_EXTRACT_BILL completed (hasDocument=${Boolean(result?.document)} sourceUrl=${result?.document?.sourceUrl || "none"})`
       );
+      if (result?.diagnostics) {
+        const d = result.diagnostics;
+        emitEvent(
+          FlowState.DOWNLOAD_OR_SELECT_BILL,
+          FlowStatus.STARTED,
+          `Download diagnostics (controlMs=${d.downloadControlMs ?? "n/a"} urlMs=${d.downloadUrlMs ?? "n/a"} totalMs=${d.totalMs ?? "n/a"} onDetail=${Boolean(d.onDetailPage)} sourceUrl=${d.sourceUrl || "none"})`
+        );
+      }
       if (!result?.document) {
         throw new FlowError(ErrorCode.ORANGE_BILL_NOT_FOUND, "Could not find downloadable billing document");
       }

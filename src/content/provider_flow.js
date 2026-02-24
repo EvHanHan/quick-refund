@@ -58,6 +58,16 @@ function checkProviderBillingReady(provider) {
       ready: Boolean(factureHeading) || text.includes("vos factures") || text.includes("facture fixe") || isProviderAuthenticated(provider)
     };
   }
+  if (provider === "sosh_provider") {
+    const href = String(location.href || "");
+    const onDetailPage = /\/facture-paiement\/\d+\/detail-facture/.test(href);
+    if (onDetailPage) {
+      return { ready: true };
+    }
+    const billing = getProviderBillingSelectors(provider);
+    const downloadButton = queryWithin(document, billing.downloadButton);
+    return { ready: Boolean(downloadButton) || isProviderAuthenticated(provider) };
+  }
   if (provider === "free_mobile_provider") {
     const diagnostics = getFreeMobileAuthDiagnostics();
     return {
@@ -92,24 +102,36 @@ async function authProvider(provider, _payload) {
 }
 
 async function navigateBilling(provider, payload) {
-  if (provider === "orange_provider") {
+  if (provider === "orange_provider" || provider === "sosh_provider") {
     const accountType = payload?.AccountType === "mobile_internet" ? "mobile_internet" : "home_internet";
-    if (!location.href.startsWith("https://espace-client.orange.fr/selectionner-un-contrat")) {
-      throw new Error("Orange is not on contract selection page");
+    const href = String(location.href || "");
+    const onSelectionPage = href.startsWith("https://espace-client.orange.fr/selectionner-un-contrat");
+    const accountIdFromUrl = extractAccountId(null, href);
+    const onBillingPage = /\/facture-paiement\/\d+/.test(href);
+    if (!onSelectionPage && !onBillingPage) {
+      throw new Error("Orange/Sosh is not on contract selection or billing page");
     }
 
-    const selectedAccountLink = await waitForAccountItem(accountType, 15000);
-    if (!selectedAccountLink) {
-      throw new Error(`Could not find Orange account card for type: ${accountType}`);
-    }
-
-    const accountHref = normalizeUrl(selectedAccountLink.getAttribute("href"));
-    const accountId = extractAccountId(selectedAccountLink, accountHref);
+    let accountId = accountIdFromUrl;
     if (!accountId) {
-      throw new Error("Could not extract Orange account id from selected card");
+      const accountWaitMs = provider === "sosh_provider" ? 1000 : 15000;
+      let selectedAccountLink = await waitForAccountItem(accountType, accountWaitMs);
+      if (!selectedAccountLink && provider === "sosh_provider") {
+        selectedAccountLink = await waitForAnyAccountItem(1000);
+      }
+      if (!selectedAccountLink) {
+        throw new Error(`Could not find Orange account card for type: ${accountType}`);
+      }
+      const accountHref = normalizeUrl(selectedAccountLink.getAttribute("href"));
+      accountId = extractAccountId(selectedAccountLink, accountHref);
+      if (!accountId) {
+        throw new Error("Could not extract Orange account id from selected card");
+      }
     }
 
-    const detailUrl = `https://espace-client.orange.fr/facture-paiement/${accountId}/detail-facture`;
+    const detailUrl = /\/detail-facture/.test(href)
+      ? href
+      : `https://espace-client.orange.fr/facture-paiement/${accountId}/detail-facture`;
     return { navigated: true, accountId, detailUrl };
   }
 
@@ -191,31 +213,46 @@ async function waitForNavigoRoutingHints(timeoutMs) {
 }
 
 async function downloadAndExtractBill(provider) {
+  const startedAt = Date.now();
+  if (provider === "sosh_provider") {
+    const href = String(location.href || "");
+    if (!/\/facture-paiement\/\d+\/detail-facture/.test(href)) {
+      throw new Error("Sosh is not on invoice detail page");
+    }
+  }
   const providerSelectors = getProviderBillingSelectors(provider);
   const billing = providerSelectors || window.__EXT_SELECTORS__.providerDefaults.billing;
   const beforeResources = new Set(performance.getEntriesByType("resource").map((entry) => entry.name));
     const isNavigo = provider === "navigo_provider";
+    const isSosh = provider === "sosh_provider";
+    const downloadWaitMs = isSosh ? 1000 : 12000;
+    const downloadUrlWaitMs = isSosh ? 1000 : 8000;
+    const downloadControlStart = Date.now();
     const downloadControl = provider === "free_provider"
     ? await findBestFreeInvoiceControl(billing.downloadButton, 12000)
     : provider === "free_mobile_provider"
       ? await findBestFreeMobileInvoiceControl(billing, 12000)
     : isNavigo
       ? await findBestNavigoInvoiceControl(billing, 20000)
-    : await waitForVisible(billing.downloadButton, 12000);
+    : await waitForVisible(billing.downloadButton, downloadWaitMs);
   if (!downloadControl) {
     throw new Error("Could not find provider PDF download button");
   }
+  const downloadControlMs = Date.now() - downloadControlStart;
 
   let didClickControl = false;
-  let href = isNavigo ? null : resolveDownloadUrl(downloadControl, beforeResources);
+  let href = isNavigo ? null : resolveDownloadUrl(downloadControl, beforeResources, provider);
   if (!href || isNavigo) {
     realClick(downloadControl);
     didClickControl = true;
     // Do not wait for physical download completion. Continue flow immediately.
+    const downloadUrlStart = Date.now();
     href = isNavigo
       ? await waitForNavigoDownloadUrl(beforeResources, 8000)
-      : await waitForDownloadUrl(downloadControl, beforeResources, 8000);
+      : await waitForDownloadUrl(downloadControl, beforeResources, provider, downloadUrlWaitMs);
+    var downloadUrlMs = Date.now() - downloadUrlStart;
   }
+  const totalMs = Date.now() - startedAt;
 
   const fileName = deriveFileName(provider, href || location.href, "application/pdf", "");
 
@@ -242,6 +279,13 @@ async function downloadAndExtractBill(provider) {
           transactionDateISO: getCurrentMonthStartISO()
         }
         : undefined
+    },
+    diagnostics: {
+      downloadControlMs,
+      downloadUrlMs: typeof downloadUrlMs === "number" ? downloadUrlMs : null,
+      totalMs,
+      sourceUrl: href || null,
+      onDetailPage: /\/detail-facture/.test(String(location.href || ""))
     }
   };
 }
@@ -751,6 +795,19 @@ async function waitForAccountItem(accountType, timeoutMs) {
   return null;
 }
 
+async function waitForAnyAccountItem(timeoutMs) {
+  const start = Date.now();
+  const selectors = window.__EXT_SELECTORS__.orange.billing.accountItems;
+
+  while (Date.now() - start < timeoutMs) {
+    const items = firstNonEmptyQuery(selectors);
+    if (items.length) return items[0];
+    await wait(250);
+  }
+
+  return null;
+}
+
 function matchesAccountType(node, accountType) {
   const text = normalizeText(node.textContent);
   if (accountType === "mobile_internet") {
@@ -760,10 +817,12 @@ function matchesAccountType(node, accountType) {
 }
 
 function extractAccountId(node, href) {
-  const dataE2e = node.getAttribute("data-e2e");
-  if (dataE2e && /^\d{6,}$/.test(dataE2e)) return dataE2e;
+  if (node && node.getAttribute) {
+    const dataE2e = node.getAttribute("data-e2e");
+    if (dataE2e && /^\d{6,}$/.test(dataE2e)) return dataE2e;
+  }
 
-  const url = href || normalizeUrl(node.getAttribute("href"));
+  const url = href || (node && node.getAttribute ? normalizeUrl(node.getAttribute("href")) : null);
   if (!url) return null;
   const match = url.match(/\/facture-paiement\/(\d+)/);
   return match ? match[1] : null;
@@ -890,9 +949,16 @@ function isOrangeAuthenticated() {
 
 function isProviderAuthenticated(provider) {
   if (provider === "orange_provider") return isOrangeAuthenticated();
+  if (provider === "sosh_provider") return isSoshAuthenticated();
   if (provider === "free_mobile_provider") return isFreeMobileAuthenticated();
   if (provider === "navigo_provider") return isNavigoAuthenticated();
   const loginSelectors = getProviderLoginSelectors(provider);
+  const hasLoginField = Boolean(queryWithin(document, loginSelectors.username) || queryWithin(document, loginSelectors.password));
+  return !hasLoginField;
+}
+
+function isSoshAuthenticated() {
+  const loginSelectors = getProviderLoginSelectors("sosh_provider");
   const hasLoginField = Boolean(queryWithin(document, loginSelectors.username) || queryWithin(document, loginSelectors.password));
   return !hasLoginField;
 }
@@ -1000,22 +1066,24 @@ function isSupportedProviderHost(hostname) {
   );
 }
 
-function resolveDownloadUrl(downloadControl, beforeResources) {
+function resolveDownloadUrl(downloadControl, beforeResources, provider) {
   const direct = normalizeUrl(
     downloadControl.getAttribute("href")
     || downloadControl.getAttribute("data-href")
     || downloadControl.getAttribute("data-url")
   );
-  if (direct) return direct;
+  const filteredDirect = filterDownloadUrl(direct, provider);
+  if (filteredDirect) return filteredDirect;
 
   const parentAnchor = downloadControl.closest("a[href]");
   const parentHref = normalizeUrl(parentAnchor?.getAttribute("href"));
-  if (parentHref) return parentHref;
+  const filteredParent = filterDownloadUrl(parentHref, provider);
+  if (filteredParent) return filteredParent;
 
-  const pageCandidate = queryDownloadCandidateFromPage();
+  const pageCandidate = filterDownloadUrl(queryDownloadCandidateFromPage(), provider);
   if (pageCandidate) return pageCandidate;
 
-  const newResource = findNewDownloadResource(beforeResources);
+  const newResource = findNewDownloadResource(beforeResources, provider);
   if (newResource) return newResource;
 
   return null;
@@ -1033,13 +1101,13 @@ function queryDownloadCandidateFromPage() {
   return normalizeUrl(match[0]);
 }
 
-function findNewDownloadResource(beforeResources) {
+function findNewDownloadResource(beforeResources, provider) {
   const entries = performance.getEntriesByType("resource");
   const fresh = entries
     .map((entry) => entry.name)
     .filter((name) => !beforeResources.has(name))
-    .find((name) => /pdf|download|facture/i.test(name));
-  return fresh || null;
+    .find((name) => /pdf|download|facture|invoice|bill|telecharg/i.test(name));
+  return filterDownloadUrl(fresh, provider);
 }
 
 function normalizeText(value) {
@@ -1157,14 +1225,46 @@ function decodeURIComponentSafe(value) {
 }
 
 
-async function waitForDownloadUrl(downloadControl, beforeResources, timeoutMs) {
+async function waitForDownloadUrl(downloadControl, beforeResources, provider, timeoutMs) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    const href = resolveDownloadUrl(downloadControl, beforeResources) || queryDownloadCandidateFromPage() || null;
+    const href = resolveDownloadUrl(downloadControl, beforeResources, provider) || filterDownloadUrl(queryDownloadCandidateFromPage(), provider) || null;
     if (href) return href;
     await wait(200);
   }
   return null;
+}
+
+function filterDownloadUrl(url, provider) {
+  const normalized = normalizeUrl(url);
+  if (!normalized) return null;
+  if (!isAllowedDownloadHost(normalized, provider)) return null;
+  if (isTrackingUrl(normalized)) return null;
+  if (isLikelyInvoiceDownload(normalized)) return normalized;
+  return null;
+}
+
+function isAllowedDownloadHost(url, provider) {
+  try {
+    const parsed = new URL(url, location.href);
+    if (provider === "orange_provider" || provider === "sosh_provider") {
+      return parsed.hostname.includes("orange.fr") || parsed.hostname.includes("orange.com");
+    }
+    return true;
+  } catch (_error) {
+    return true;
+  }
+}
+
+function isLikelyInvoiceDownload(url) {
+  return /(\.pdf)(\?|#|$)/i.test(url)
+    || /facture|invoice|bill|telecharg/i.test(url);
+}
+
+function isTrackingUrl(url) {
+  if (/\.(gif|png|jpg|jpeg)(\?|#|$)/i.test(url)) return true;
+  if (/kameleoon|pdata\.orange\.fr|doubleclick|googletagmanager|google-analytics|tagmanager/i.test(url)) return true;
+  return /\/_pdb\.gif/i.test(url);
 }
 
 async function waitForNavigoDownloadUrl(beforeResources, timeoutMs) {
