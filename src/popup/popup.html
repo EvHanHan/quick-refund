@@ -37,14 +37,28 @@
         </select>
       </label>
 
+      <div class="reminderRow">
+        <label class="inlineLabel">
+          <input id="MonthlyReminderEnabled" type="checkbox" checked />
+          Monthly reminder (first Monday 12:00)
+        </label>
+        <button id="testReminder" class="smallButton">Preview Reminder</button>
+      </div>
+      <div id="reminderDueBanner" class="instruction hidden"></div>
+
       <div class="actions">
         <button id="startFlow">Start Flow</button>
-        <button id="resumeFlow" disabled>Resume</button>
+        <button id="stopFlow">Stop</button>
       </div>
 
       <div id="instructionBanner" class="instruction hidden"></div>
 
-      <section>
+      <label class="inlineLabel">
+        <input id="ShowStatus" type="checkbox" />
+        Show status
+      </label>
+
+      <section id="statusSection" class="hidden">
         <h2>Status</h2>
         <div id="statusLine">Idle</div>
         <div id="updateStatus">Update check: pending</div>

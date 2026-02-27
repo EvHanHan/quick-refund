@@ -2,15 +2,22 @@ import { MessageType } from "../shared/contracts.js";
 
 const LOGIN_CACHE_KEY = "provider_login_cache_v1";
 const LOGIN_CACHE_TTL_MS = 30 * 60 * 1000;
+const REMINDER_SETTINGS_KEY = "monthly_reminder_settings_v1";
+const REMINDER_DUE_KEY = "monthly_reminder_due_v1";
 
 const startButton = document.getElementById("startFlow");
-const resumeButton = document.getElementById("resumeFlow");
+const stopButton = document.getElementById("stopFlow");
 const statusLine = document.getElementById("statusLine");
 const updateStatusLine = document.getElementById("updateStatus");
 const eventLog = document.getElementById("eventLog");
 const instructionBanner = document.getElementById("instructionBanner");
+const reminderDueBanner = document.getElementById("reminderDueBanner");
+const testReminderButton = document.getElementById("testReminder");
+const showStatusInput = document.getElementById("ShowStatus");
+const statusSection = document.getElementById("statusSection");
 const AccountTypeInput = document.getElementById("AccountType");
 const ProviderInput = document.getElementById("Provider");
+const MonthlyReminderEnabledInput = document.getElementById("MonthlyReminderEnabled");
 const DEFAULT_BILLING_OPTIONS = [
   { value: "home_internet", label: "Internet" },
   { value: "mobile_internet", label: "Mobile" }
@@ -31,6 +38,24 @@ ProviderInput.addEventListener("change", () => {
   persistLoginDraft();
 });
 window.addEventListener("beforeunload", persistLoginDraft);
+MonthlyReminderEnabledInput.addEventListener("change", () => {
+  void updateReminderSettings(MonthlyReminderEnabledInput.checked);
+});
+testReminderButton.addEventListener("click", async () => {
+  testReminderButton.disabled = true;
+  const response = await sendMessage({
+    type: MessageType.TRIGGER_REMINDER_TEST
+  });
+  if (!response?.ok) {
+    statusLine.textContent = `Error: ${response?.error?.message || "Unable to trigger reminder test"}`;
+  }
+  setTimeout(() => {
+    testReminderButton.disabled = false;
+  }, 1500);
+});
+showStatusInput.addEventListener("change", () => {
+  setStatusVisibility(showStatusInput.checked);
+});
 
 startButton.addEventListener("click", async () => {
   const AccountType = AccountTypeInput.value;
@@ -56,13 +81,14 @@ startButton.addEventListener("click", async () => {
   renderResponse(response);
 });
 
-resumeButton.addEventListener("click", async () => {
-  resumeButton.disabled = true;
+stopButton.addEventListener("click", async () => {
+  stopButton.disabled = true;
   const response = await sendMessage({
-    type: MessageType.RESUME_FLOW,
+    type: MessageType.STOP_FLOW,
     payload: {}
   });
   renderResponse(response);
+  stopButton.disabled = false;
 });
 
 chrome.runtime.onMessage.addListener((message) => {
@@ -77,6 +103,7 @@ initPopup().catch(() => {
 });
 
 async function pollStatus() {
+  await refreshReminderDueBanner();
   const response = await sendMessage({ type: MessageType.GET_STATUS });
   renderResponse(response);
 }
@@ -91,7 +118,8 @@ function renderResponse(response) {
   statusLine.textContent = `${data.state} (${data.status})`;
   renderUpdateStatus(data.updateStatus);
 
-  resumeButton.disabled = !data.waitingForUser;
+  const hasActiveFlow = data.state !== "IDLE" && data.state !== "DONE" && data.state !== "FAILED";
+  stopButton.disabled = !hasActiveFlow && !data.waitingForUser;
   updateInstructionBanner(data);
 
   const events = data.events || [];
@@ -150,9 +178,16 @@ function updateInstructionBanner(data) {
 }
 
 async function initPopup() {
+  setStatusVisibility(showStatusInput.checked);
   await loadLoginCacheIntoForm();
+  await loadReminderSettingsIntoForm();
+  await refreshReminderDueBanner();
   await sendMessage({ type: MessageType.CHECK_UPDATES });
   await pollStatus();
+}
+
+function setStatusVisibility(visible) {
+  statusSection.classList.toggle("hidden", !visible);
 }
 
 async function loadLoginCacheIntoForm() {
@@ -168,6 +203,44 @@ async function saveLoginCache(login) {
     expiresAt: Date.now() + LOGIN_CACHE_TTL_MS
   };
   await chrome.storage.local.set({ [LOGIN_CACHE_KEY]: payload });
+}
+
+async function loadReminderSettingsIntoForm() {
+  const result = await chrome.storage.local.get(REMINDER_SETTINGS_KEY);
+  const enabled = typeof result?.[REMINDER_SETTINGS_KEY]?.enabled === "boolean"
+    ? result[REMINDER_SETTINGS_KEY].enabled
+    : true;
+  MonthlyReminderEnabledInput.checked = enabled;
+}
+
+async function updateReminderSettings(enabled) {
+  await chrome.storage.local.set({ [REMINDER_SETTINGS_KEY]: { enabled } });
+  await sendMessage({
+    type: MessageType.UPDATE_REMINDER_SETTINGS,
+    payload: { enabled }
+  });
+}
+
+async function refreshReminderDueBanner() {
+  const result = await chrome.storage.local.get(REMINDER_DUE_KEY);
+  const dueState = result?.[REMINDER_DUE_KEY];
+  const isDue = Boolean(dueState?.due);
+  if (!isDue) {
+    reminderDueBanner.textContent = "";
+    reminderDueBanner.classList.add("hidden");
+    return;
+  }
+  const since = dueState?.since
+    ? new Date(dueState.since).toLocaleString(undefined, {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit"
+    })
+    : "an earlier reminder";
+  reminderDueBanner.textContent = `Reminder due since ${since}. Start Flow to begin reimbursement.`;
+  reminderDueBanner.classList.remove("hidden");
 }
 
 async function readLoginCache() {

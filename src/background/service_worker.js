@@ -1,9 +1,25 @@
 import { ErrorCode, FlowState, FlowStatus, MAX_RETRIES, MessageType, TIMEOUTS_MS } from "../shared/contracts.js";
 import { FlowError, toSafeError } from "../shared/errors.js";
+import {
+  MAX_REMINDER_ATTEMPTS,
+  REMINDER_HOUR_LOCAL,
+  getCurrentOrNextCycleBase,
+  getCycleKey,
+  nextWeekdaySameTime,
+  resolveNextDueFromBase
+} from "../shared/reminder_schedule.js";
 
 const NAVAN_UPLOAD_RECEIPTS_URL = "https://app.navan.com/app/liquid/user/transactions/upload-receipts";
 const LOGIN_CACHE_KEY = "provider_login_cache_v1";
 const LOGIN_CACHE_CLEANUP_ALARM = "orange_login_cache_cleanup";
+const MONTHLY_REMINDER_ALARM = "monthly_reimbursement_reminder";
+const REMINDER_SETTINGS_KEY = "monthly_reminder_settings_v1";
+const REMINDER_STATE_KEY = "monthly_reminder_state_v1";
+const REMINDER_HISTORY_KEY = "monthly_reminder_history_v1";
+const REMINDER_DUE_KEY = "monthly_reminder_due_v1";
+const REMINDER_NOTIFICATION_ID = "monthly_reimbursement_notification";
+const REMINDER_LATE_GRACE_MS = 5 * 60_000;
+const DAY_MS = 24 * 60 * 60 * 1000;
 const UPDATE_STATUS_KEY = "manifest_update_status_v1";
 const REPO_MANIFEST_URL = "https://raw.githubusercontent.com/MrCerise/dataiku-navan/main/manifest.json";
 const UPLOAD_ACTION_TIMEOUT_MS = 120_000;
@@ -43,12 +59,24 @@ const PROVIDER_CONFIGS = {
 };
 
 chrome.alarms.create(LOGIN_CACHE_CLEANUP_ALARM, { periodInMinutes: 1 });
-chrome.alarms.onAlarm.addListener(async (alarm) => {
-  if (alarm?.name === LOGIN_CACHE_CLEANUP_ALARM) {
-    await clearExpiredLoginCache();
-  }
+chrome.alarms.onAlarm.addListener((alarm) => {
+  void handleAlarm(alarm);
+});
+chrome.notifications.onClicked.addListener((notificationId) => {
+  if (!String(notificationId || "").startsWith(REMINDER_NOTIFICATION_ID)) return;
+  void openReminderLandingPage();
+});
+chrome.runtime.onStartup.addListener(() => {
+  void scheduleMonthlyReminder();
+  void refreshReminderBadge();
+});
+chrome.runtime.onInstalled.addListener(() => {
+  void scheduleMonthlyReminder();
+  void refreshReminderBadge();
 });
 void initializeUpdateStatus();
+void scheduleMonthlyReminder();
+void refreshReminderBadge();
 
 const stateOrder = [
   FlowState.OPEN_ORANGE_LOGIN,
@@ -59,6 +87,7 @@ const stateOrder = [
 ];
 
 const flowContext = {
+  activeRunId: 0,
   state: FlowState.IDLE,
   status: FlowStatus.SUCCESS,
   events: [],
@@ -89,17 +118,83 @@ async function handleMessage(message) {
       return startFlow(message.payload);
     case MessageType.RESUME_FLOW:
       return resumeFlow(message.payload || {});
+    case MessageType.STOP_FLOW:
+      return stopFlow();
     case MessageType.GET_STATUS:
       return { ok: true, data: getStatus() };
     case MessageType.CHECK_UPDATES:
       return { ok: true, data: await checkManifestUpdate(true) };
+    case MessageType.UPDATE_REMINDER_SETTINGS:
+      return updateReminderSettings(message.payload);
+    case MessageType.TRIGGER_REMINDER_TEST:
+      return triggerReminderTest();
     default:
       return { ok: false, error: { code: ErrorCode.UNKNOWN, message: "Unsupported message type" } };
   }
 }
 
+async function handleAlarm(alarm) {
+  try {
+    if (!alarm?.name) return;
+    if (alarm.name === LOGIN_CACHE_CLEANUP_ALARM) {
+      await clearExpiredLoginCache();
+      return;
+    }
+    if (alarm.name === MONTHLY_REMINDER_ALARM) {
+      await handleMonthlyReminderAlarm();
+      return;
+    }
+  } catch (error) {
+    console.warn("Reminder alarm failed", error);
+  }
+}
+
+async function updateReminderSettings(payload) {
+  const enabled = Boolean(payload?.enabled);
+  await chrome.storage.local.set({ [REMINDER_SETTINGS_KEY]: { enabled } });
+  const nextReminderAt = await scheduleMonthlyReminder();
+  if (!enabled) {
+    await setReminderDue(false);
+  }
+  return {
+    ok: true,
+    data: {
+      enabled,
+      nextReminderAt: nextReminderAt ? nextReminderAt.toISOString() : null
+    }
+  };
+}
+
+async function triggerReminderTest() {
+  const permissionLevel = await chrome.notifications.getPermissionLevel();
+  if (permissionLevel !== "granted") {
+    return {
+      ok: false,
+      error: {
+        code: ErrorCode.UNKNOWN,
+        message: `Chrome notification permission is '${permissionLevel}'. Enable notifications for Chrome in system settings.`
+      }
+    };
+  }
+
+  const notificationId = `${REMINDER_NOTIFICATION_ID}_${Date.now()}`;
+  await showMonthlyReminderNotification(notificationId, "test");
+  await setReminderDue(true, new Date().toISOString());
+  return {
+    ok: true,
+    data: {
+      triggeredAt: new Date().toISOString(),
+      notificationId,
+      permissionLevel,
+      created: true
+    }
+  };
+}
+
 async function startFlow(runConfig) {
+  await setReminderDue(false);
   clearFlow();
+  const runId = beginNewRun();
   const normalizedProvider = normalizeProviderId(runConfig?.Provider);
   flowContext.startedAt = Date.now();
   flowContext.runConfig = {
@@ -114,7 +209,7 @@ async function startFlow(runConfig) {
     "Flow settings captured for this run"
   );
   resetInactivityTimer();
-  runStateMachine().catch((error) => failFlow(error));
+  runStateMachine(runId).catch((error) => failFlow(error, runId));
   return { ok: true, data: getStatus() };
 }
 
@@ -141,7 +236,20 @@ async function resumeFlow(payload) {
   emitEvent(flowContext.state, FlowStatus.SUCCESS, resumeMessage);
   stopProviderLoginWatcher();
   resetInactivityTimer();
-  runStateMachine().catch((error) => failFlow(error));
+  const runId = flowContext.activeRunId;
+  runStateMachine(runId).catch((error) => failFlow(error, runId));
+  return { ok: true, data: getStatus() };
+}
+
+async function stopFlow() {
+  beginNewRun();
+  const hadActiveFlow = flowContext.state !== FlowState.IDLE || flowContext.waitingForUser;
+  clearFlow();
+  emitEvent(
+    FlowState.IDLE,
+    FlowStatus.SUCCESS,
+    hadActiveFlow ? "Flow stopped by user" : "No active flow to stop"
+  );
   return { ok: true, data: getStatus() };
 }
 
@@ -157,8 +265,9 @@ function getStatus() {
   };
 }
 
-async function runStateMachine() {
+async function runStateMachine(runId) {
   for (const state of stateOrder) {
+    if (!isRunActive(runId)) return;
     if (flowContext.waitingForUser) return;
     if (flowContext.state === FlowState.DONE || flowContext.state === FlowState.FAILED) return;
 
@@ -166,7 +275,7 @@ async function runStateMachine() {
     const targetIndex = stateOrder.indexOf(state);
     if (flowContext.status === FlowStatus.SUCCESS && currentIndex >= 0 && targetIndex <= currentIndex) continue;
 
-    await executeState(state, async () => runStep(state));
+    await executeState(state, async () => runStep(state), runId);
   }
 }
 
@@ -244,7 +353,7 @@ async function runStep(state) {
         } else if (authResult?.captchaRequired) {
           flowContext.waitingForUser = true;
           flowContext.waitingReason = "ORANGE_CAPTCHA";
-          emitEvent(FlowState.AUTH_ORANGE, FlowStatus.WAITING_USER, "Captcha detected on provider. Solve it in the tab, then click Resume.");
+          emitEvent(FlowState.AUTH_ORANGE, FlowStatus.WAITING_USER, "Captcha detected on provider. Solve it in the tab, or click Stop to cancel.");
         } else {
           clearRunPassword();
         }
@@ -347,7 +456,7 @@ async function runStep(state) {
       } catch (_error) {
         flowContext.waitingForUser = true;
         flowContext.waitingReason = "NAVAN_SSO";
-        emitEvent(FlowState.WAIT_FOR_USER_GOOGLE_SSO, FlowStatus.WAITING_USER, "Complete Google SSO in Navan, then click Resume to finish");
+        emitEvent(FlowState.WAIT_FOR_USER_GOOGLE_SSO, FlowStatus.WAITING_USER, "Complete Google SSO in Navan, or click Stop to cancel.");
       }
       return;
     case FlowState.WAIT_FOR_USER_GOOGLE_SSO:
@@ -374,7 +483,7 @@ async function runStep(state) {
           emitEvent(
             FlowState.UPLOAD_DOCUMENT,
             FlowStatus.WAITING_USER,
-            "Upload the file manually in Navan, then click Resume."
+            "Upload the file manually in Navan, or click Stop to cancel."
           );
         }
       }
@@ -389,7 +498,8 @@ async function runStep(state) {
   }
 }
 
-async function executeState(state, action) {
+async function executeState(state, action, runId) {
+  if (!isRunActive(runId)) return;
   flowContext.state = state;
   emitEvent(state, FlowStatus.STARTED, `Entering ${state}`);
 
@@ -401,8 +511,10 @@ async function executeState(state, action) {
   let attempt = flowContext.retryCount[key] || 0;
 
   while (attempt <= MAX_RETRIES) {
+    if (!isRunActive(runId)) return;
     try {
       await action();
+      if (!isRunActive(runId)) return;
       flowContext.retryCount[key] = attempt;
       flowContext.status = FlowStatus.SUCCESS;
       emitEvent(state, FlowStatus.SUCCESS, `${state} succeeded`);
@@ -412,6 +524,7 @@ async function executeState(state, action) {
       }
       return;
     } catch (error) {
+      if (!isRunActive(runId)) return;
       attempt += 1;
       flowContext.retryCount[key] = attempt;
       if (attempt > MAX_RETRIES) {
@@ -543,7 +656,8 @@ function emitEvent(state, status, details, errorCode) {
   });
 }
 
-function failFlow(error) {
+function failFlow(error, runId = flowContext.activeRunId) {
+  if (!isRunActive(runId)) return;
   stopProviderLoginWatcher();
   const safe = toSafeError(error, ErrorCode.UNKNOWN);
   flowContext.state = FlowState.FAILED;
@@ -572,6 +686,15 @@ function clearFlow() {
   }
 }
 
+function beginNewRun() {
+  flowContext.activeRunId += 1;
+  return flowContext.activeRunId;
+}
+
+function isRunActive(runId) {
+  return runId === flowContext.activeRunId;
+}
+
 function clearRunPassword() {
   if (!flowContext.runConfig) return;
   flowContext.runConfig.Password = "";
@@ -594,7 +717,12 @@ function sleep(ms) {
 
 function startProviderLoginWatcher() {
   stopProviderLoginWatcher();
+  const runId = flowContext.activeRunId;
   flowContext.providerLoginWatcher = setInterval(async () => {
+    if (!isRunActive(runId)) {
+      stopProviderLoginWatcher();
+      return;
+    }
     if (!flowContext.waitingForUser || flowContext.waitingReason !== "PROVIDER_MANUAL_LOGIN") {
       stopProviderLoginWatcher();
       return;
@@ -614,7 +742,7 @@ function startProviderLoginWatcher() {
       flowContext.waitingReason = null;
       stopProviderLoginWatcher();
       emitEvent(FlowState.AUTH_ORANGE, FlowStatus.SUCCESS, "Provider billing page detected (Vos factures). Continuing flow.");
-      runStateMachine().catch((error) => failFlow(error));
+      runStateMachine(runId).catch((error) => failFlow(error, runId));
     } catch (_error) {
       // keep polling
     }
@@ -668,6 +796,227 @@ async function clearExpiredLoginCache() {
   if (!cached?.expiresAt) return;
   if (cached.expiresAt > Date.now()) return;
   await chrome.storage.local.remove(LOGIN_CACHE_KEY);
+}
+
+async function handleMonthlyReminderAlarm() {
+  const settings = await getReminderSettings();
+  if (!settings.enabled) {
+    await clearReminderSchedule();
+    return;
+  }
+
+  const state = await getReminderState();
+  if (!state) {
+    await scheduleMonthlyReminder();
+    return;
+  }
+
+  const nowMs = Date.now();
+  await showMonthlyReminderNotification(REMINDER_NOTIFICATION_ID, "monthly");
+  await setReminderDue(true, new Date().toISOString());
+  if (state.attemptNumber === 1 && nowMs - state.nextDueAtMs <= REMINDER_LATE_GRACE_MS) {
+    const nextCycle = buildNewCycleState(new Date(state.nextDueAtMs + DAY_MS));
+    await chrome.storage.local.set({ [REMINDER_STATE_KEY]: nextCycle });
+    await chrome.alarms.create(MONTHLY_REMINDER_ALARM, { when: nextCycle.nextDueAtMs });
+    return;
+  }
+
+  const advanced = advanceReminderState(state);
+  await chrome.storage.local.set({ [REMINDER_STATE_KEY]: advanced });
+  await scheduleMonthlyReminder();
+}
+
+async function scheduleMonthlyReminder(now = new Date()) {
+  const settings = await getReminderSettings();
+  if (!settings.enabled) {
+    await clearReminderSchedule();
+    return null;
+  }
+
+  const state = await getReminderState();
+  const resolved = resolveReminderStateForNow(state, now);
+  await chrome.storage.local.set({ [REMINDER_STATE_KEY]: resolved });
+  await chrome.alarms.create(MONTHLY_REMINDER_ALARM, { when: resolved.nextDueAtMs });
+  return new Date(resolved.nextDueAtMs);
+}
+
+async function clearReminderSchedule() {
+  await chrome.alarms.clear(MONTHLY_REMINDER_ALARM);
+  await chrome.storage.local.remove(REMINDER_STATE_KEY);
+}
+
+async function setReminderDue(due, sinceISO = null) {
+  const payload = due
+    ? {
+      due: true,
+      since: sinceISO || new Date().toISOString()
+    }
+    : {
+      due: false,
+      since: null
+    };
+  await chrome.storage.local.set({ [REMINDER_DUE_KEY]: payload });
+  await applyReminderBadge(payload);
+}
+
+async function refreshReminderBadge() {
+  const result = await chrome.storage.local.get(REMINDER_DUE_KEY);
+  const payload = result?.[REMINDER_DUE_KEY];
+  await applyReminderBadge(payload);
+}
+
+async function applyReminderBadge(payload) {
+  const isDue = Boolean(payload?.due);
+  if (isDue) {
+    await chrome.action.setBadgeBackgroundColor({ color: "#dc3545" });
+    await chrome.action.setBadgeText({ text: "!" });
+    await chrome.action.setTitle({ title: "Reminder due: start reimbursement flow" });
+    return;
+  }
+  await chrome.action.setBadgeText({ text: "" });
+  await chrome.action.setTitle({ title: "1-click navan refund" });
+}
+
+function resolveReminderStateForNow(state, now = new Date()) {
+  const nowMs = now.getTime();
+  if (!state || !Number.isFinite(state.baseDueAtMs) || !Number.isFinite(state.nextDueAtMs) || !Number.isInteger(state.attemptNumber)) {
+    return buildNewCycleState(now);
+  }
+
+  if (nowMs <= state.nextDueAtMs) {
+    return state;
+  }
+
+  const baseDueAt = new Date(state.baseDueAtMs);
+  const nextDue = resolveNextDueFromBase(baseDueAt, now, MAX_REMINDER_ATTEMPTS - 1);
+  if (!nextDue) {
+    return buildNewCycleState(now);
+  }
+
+  return {
+    cycleKey: getCycleKey(baseDueAt),
+    baseDueAtMs: baseDueAt.getTime(),
+    nextDueAtMs: nextDue.dueAt.getTime(),
+    attemptNumber: nextDue.attemptNumber
+  };
+}
+
+function buildNewCycleState(now = new Date()) {
+  const baseDueAt = getCurrentOrNextCycleBase(now, REMINDER_HOUR_LOCAL);
+  return {
+    cycleKey: getCycleKey(baseDueAt),
+    baseDueAtMs: baseDueAt.getTime(),
+    nextDueAtMs: baseDueAt.getTime(),
+    attemptNumber: 1
+  };
+}
+
+function advanceReminderState(state) {
+  if (!state || !Number.isFinite(state.nextDueAtMs) || !Number.isInteger(state.attemptNumber)) {
+    return buildNewCycleState();
+  }
+
+  if (state.attemptNumber >= MAX_REMINDER_ATTEMPTS) {
+    return buildNewCycleState(new Date(state.nextDueAtMs + DAY_MS));
+  }
+
+  const nextDueAt = nextWeekdaySameTime(new Date(state.nextDueAtMs));
+  return {
+    cycleKey: state.cycleKey,
+    baseDueAtMs: state.baseDueAtMs,
+    nextDueAtMs: nextDueAt.getTime(),
+    attemptNumber: state.attemptNumber + 1
+  };
+}
+
+async function getReminderSettings() {
+  const result = await chrome.storage.local.get(REMINDER_SETTINGS_KEY);
+  const raw = result?.[REMINDER_SETTINGS_KEY];
+  if (!raw || typeof raw.enabled !== "boolean") {
+    return { enabled: true };
+  }
+  return { enabled: raw.enabled };
+}
+
+async function getReminderState() {
+  const result = await chrome.storage.local.get(REMINDER_STATE_KEY);
+  const raw = result?.[REMINDER_STATE_KEY];
+  if (!raw || typeof raw !== "object") return null;
+  const baseDueAtMs = Number(raw.baseDueAtMs);
+  const nextDueAtMs = Number(raw.nextDueAtMs);
+  const attemptNumber = Number.parseInt(raw.attemptNumber, 10);
+  if (!Number.isFinite(baseDueAtMs) || !Number.isFinite(nextDueAtMs) || !Number.isInteger(attemptNumber)) {
+    return null;
+  }
+  return {
+    cycleKey: String(raw.cycleKey || ""),
+    baseDueAtMs,
+    nextDueAtMs,
+    attemptNumber
+  };
+}
+
+async function showMonthlyReminderNotification(notificationId = REMINDER_NOTIFICATION_ID, source = "monthly") {
+  const iconPrimary = chrome.runtime.getURL("assets/icon-128.png");
+  try {
+    await chrome.notifications.create(notificationId, {
+      type: "basic",
+      iconUrl: iconPrimary,
+      title: "Reimbursement reminder",
+      message: "It is reimbursement time. Start your flow now."
+    });
+    await appendReminderHistory({
+      source,
+      notificationId,
+      status: "shown",
+      detail: "Notification created with primary icon."
+    });
+  } catch (_error) {
+    const iconFallback = chrome.runtime.getURL("assets/icon-48.png");
+    try {
+      await chrome.notifications.create(notificationId, {
+        type: "basic",
+        iconUrl: iconFallback,
+        title: "Reimbursement reminder",
+        message: "It is reimbursement time. Start your flow now."
+      });
+      await appendReminderHistory({
+        source,
+        notificationId,
+        status: "shown",
+        detail: "Notification created with fallback icon."
+      });
+    } catch (fallbackError) {
+      await appendReminderHistory({
+        source,
+        notificationId,
+        status: "failed",
+        detail: String(fallbackError?.message || fallbackError || "Unknown notification error")
+      });
+      throw fallbackError;
+    }
+  }
+}
+
+async function appendReminderHistory(entry) {
+  const result = await chrome.storage.local.get(REMINDER_HISTORY_KEY);
+  const existing = Array.isArray(result?.[REMINDER_HISTORY_KEY]) ? result[REMINDER_HISTORY_KEY] : [];
+  const next = [
+    ...existing,
+    {
+      timestamp: new Date().toISOString(),
+      source: String(entry?.source || "monthly"),
+      notificationId: String(entry?.notificationId || ""),
+      status: String(entry?.status || "shown"),
+      detail: String(entry?.detail || "")
+    }
+  ].slice(-30);
+  await chrome.storage.local.set({ [REMINDER_HISTORY_KEY]: next });
+}
+
+async function openReminderLandingPage() {
+  const popupUrl = chrome.runtime.getURL("src/popup/popup.html");
+  await chrome.tabs.create({ url: popupUrl, active: true });
 }
 
 function normalizeProviderId(provider) {

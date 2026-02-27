@@ -225,8 +225,9 @@ async function downloadAndExtractBill(provider) {
   const beforeResources = new Set(performance.getEntriesByType("resource").map((entry) => entry.name));
     const isNavigo = provider === "navigo_provider";
     const isSosh = provider === "sosh_provider";
+    const isOrange = provider === "orange_provider";
     const downloadWaitMs = isSosh ? 1000 : 12000;
-    const downloadUrlWaitMs = isSosh ? 1000 : 8000;
+    const downloadUrlWaitMs = (isSosh || isOrange) ? 1000 : 8000;
     const downloadControlStart = Date.now();
     const downloadControl = provider === "free_provider"
     ? await findBestFreeInvoiceControl(billing.downloadButton, 12000)

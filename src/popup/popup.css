@@ -63,7 +63,7 @@ label {
   font-size: 12px;
 }
 
-input,
+input:not([type="checkbox"]),
 select {
   width: 100%;
   margin-top: 3px;
@@ -73,10 +73,31 @@ select {
   color: var(--text);
 }
 
+input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+  vertical-align: middle;
+}
+
 .actions {
   display: flex;
   gap: 8px;
   margin-top: 10px;
+}
+
+.reminderRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.inlineLabel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 0;
 }
 
 .instruction {
@@ -106,6 +127,19 @@ button {
 button[disabled] {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+.smallButton {
+  padding: 4px 8px;
+  font-size: 12px;
+  white-space: nowrap;
+  border-color: var(--border);
+  background: var(--panel);
+  color: var(--text);
+}
+
+.smallButton:hover {
+  background: #eef3f9;
 }
 
 #statusLine {
