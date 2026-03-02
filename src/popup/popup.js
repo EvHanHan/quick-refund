@@ -3,7 +3,6 @@ import { MessageType } from "../shared/contracts.js";
 const LOGIN_CACHE_KEY = "provider_login_cache_v1";
 const LOGIN_CACHE_TTL_MS = 30 * 60 * 1000;
 const REMINDER_SETTINGS_KEY = "monthly_reminder_settings_v1";
-const REMINDER_DUE_KEY = "monthly_reminder_due_v1";
 
 const startButton = document.getElementById("startFlow");
 const stopButton = document.getElementById("stopFlow");
@@ -11,7 +10,6 @@ const statusLine = document.getElementById("statusLine");
 const updateStatusLine = document.getElementById("updateStatus");
 const eventLog = document.getElementById("eventLog");
 const instructionBanner = document.getElementById("instructionBanner");
-const reminderDueBanner = document.getElementById("reminderDueBanner");
 const testReminderButton = document.getElementById("testReminder");
 const showStatusInput = document.getElementById("ShowStatus");
 const statusSection = document.getElementById("statusSection");
@@ -103,7 +101,6 @@ initPopup().catch(() => {
 });
 
 async function pollStatus() {
-  await refreshReminderDueBanner();
   const response = await sendMessage({ type: MessageType.GET_STATUS });
   renderResponse(response);
 }
@@ -181,7 +178,6 @@ async function initPopup() {
   setStatusVisibility(showStatusInput.checked);
   await loadLoginCacheIntoForm();
   await loadReminderSettingsIntoForm();
-  await refreshReminderDueBanner();
   await sendMessage({ type: MessageType.CHECK_UPDATES });
   await pollStatus();
 }
@@ -219,28 +215,6 @@ async function updateReminderSettings(enabled) {
     type: MessageType.UPDATE_REMINDER_SETTINGS,
     payload: { enabled }
   });
-}
-
-async function refreshReminderDueBanner() {
-  const result = await chrome.storage.local.get(REMINDER_DUE_KEY);
-  const dueState = result?.[REMINDER_DUE_KEY];
-  const isDue = Boolean(dueState?.due);
-  if (!isDue) {
-    reminderDueBanner.textContent = "";
-    reminderDueBanner.classList.add("hidden");
-    return;
-  }
-  const since = dueState?.since
-    ? new Date(dueState.since).toLocaleString(undefined, {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-      hour: "numeric",
-      minute: "2-digit"
-    })
-    : "an earlier reminder";
-  reminderDueBanner.textContent = `Reminder due since ${since}. Start Flow to begin reimbursement.`;
-  reminderDueBanner.classList.remove("hidden");
 }
 
 async function readLoginCache() {
