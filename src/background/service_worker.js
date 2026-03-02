@@ -199,7 +199,7 @@ async function startFlow(runConfig) {
   flowContext.startedAt = Date.now();
   flowContext.runConfig = {
     Password: String(runConfig?.Password || ""),
-    AccountType: runConfig?.AccountType === "mobile_internet" ? "mobile_internet" : "home_internet",
+    AccountType: normalizeAccountType(normalizedProvider, runConfig?.AccountType),
     Provider: PROVIDER_CONFIGS[normalizedProvider] ? normalizedProvider : "orange_provider"
   };
 
@@ -1024,6 +1024,16 @@ function normalizeProviderId(provider) {
   const value = String(provider || "").trim();
   if (value === "freemobile_provider") return "free_mobile_provider";
   return value;
+}
+
+function normalizeAccountType(provider, accountType) {
+  const value = String(accountType || "").trim();
+  if (provider === "navigo_provider") {
+    if (value === "commuter_benefits" || value === "yearly") return "yearly";
+    if (value === "monthly") return "monthly";
+    return "monthly";
+  }
+  return value === "mobile_internet" ? "mobile_internet" : "home_internet";
 }
 
 async function initializeUpdateStatus() {

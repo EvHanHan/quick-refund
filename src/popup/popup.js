@@ -27,7 +27,8 @@ const FREE_MOBILE_BILLING_OPTIONS = [
   { value: "mobile_internet", label: "Mobile" }
 ];
 const NAVIGO_BILLING_OPTIONS = [
-  { value: "commuter_benefits", label: "Commuter Benefits" }
+  { value: "monthly", label: "monthly" },
+  { value: "yearly", label: "yearly" }
 ];
 
 AccountTypeInput.addEventListener("change", persistLoginDraft);
@@ -237,13 +238,26 @@ async function readLoginCache() {
       AccountType: legacyAccountType === "mobile_internet"
         ? "mobile_internet"
         : legacyAccountType === "commuter_benefits"
-          ? "commuter_benefits"
+          ? "yearly"
+          : legacyAccountType === "yearly"
+            ? "yearly"
+            : legacyAccountType === "monthly"
+              ? "monthly"
           : "home_internet",
       Provider: String(cached.Provider || ""),
       expiresAt: cached.expiresAt
     };
     await chrome.storage.local.set({ [LOGIN_CACHE_KEY]: cleaned });
     return cleaned;
+  }
+
+  if (cached.AccountType === "commuter_benefits") {
+    const migrated = {
+      ...cached,
+      AccountType: "yearly"
+    };
+    await chrome.storage.local.set({ [LOGIN_CACHE_KEY]: migrated });
+    return migrated;
   }
 
   return cached;
@@ -268,7 +282,10 @@ function syncBillingTypeOptions(provider, preferredValue) {
 
 function setBillingTypeOptions(options, preferredValue) {
   if (!Array.isArray(options) || options.length === 0) return;
-  const previous = preferredValue || AccountTypeInput.value;
+  const normalizedPreferredValue = preferredValue === "commuter_benefits"
+    ? "yearly"
+    : preferredValue;
+  const previous = normalizedPreferredValue || AccountTypeInput.value;
   AccountTypeInput.innerHTML = options
     .map((option) => `<option value="${option.value}">${option.label}</option>`)
     .join("");

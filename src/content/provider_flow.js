@@ -170,6 +170,17 @@ async function navigateBilling(provider, payload) {
       throw new Error("Navigo user is not authenticated");
     }
     await waitForNavigoRoutingHints(4000);
+    const accountType = String(payload?.AccountType || "").trim();
+
+    if (accountType === "monthly") {
+      const monthly = await navigateNavigoMonthlyPath(20_000);
+      if (!monthly?.navigated) {
+        throw new Error(
+          `Could not open Navigo monthly attestation flow (${monthly?.reason || "unknown"}) | ${summarizeNavigoPageDiagnostics()}`
+        );
+      }
+      return { navigated: true, detailUrl: monthly.detailUrl || location.href };
+    }
 
     const prelevementsUrl = resolveNavigoPrelevementsUrl();
     if (prelevementsUrl) {
@@ -207,7 +218,8 @@ async function waitForNavigoRoutingHints(timeoutMs) {
     const hasMonNavigo = Boolean(findNavigoAnchorByText("mon navigo"));
     const onDetailPage = /\/espace_client\/detail\/[^/?#]+/i.test(String(location.pathname || ""));
     const onPrelevementPage = /\/prelevements\/[^/?#]+/i.test(String(location.pathname || ""));
-    if (hasDetailLink || hasMonNavigo || onDetailPage || onPrelevementPage) return;
+    const onAttestationPage = /\/attestation\/[^/?#]+/i.test(String(location.pathname || ""));
+    if (hasDetailLink || hasMonNavigo || onDetailPage || onPrelevementPage || onAttestationPage) return;
     await wait(150);
   }
 }
@@ -579,6 +591,128 @@ function findClickableByLooseText(text) {
   return nodes.find((node) => normalizeComparableText(node.textContent || "").includes(target) && isVisible(node)) || null;
 }
 
+function isNavigoEspaceClientRoot() {
+  return /^\/espace_client\/?$/i.test(String(location.pathname || ""));
+}
+
+function isNavigoMonEspaceHome() {
+  const host = String(location.hostname || "").toLowerCase();
+  return host.includes("mon-espace.iledefrance-mobilites.fr");
+}
+
+function isNavigoDetailPage() {
+  return /\/espace_client\/detail\/[^/?#]+/i.test(String(location.pathname || ""));
+}
+
+function isNavigoAttestationPage() {
+  return /\/attestation\/[^/?#]+/i.test(String(location.pathname || ""));
+}
+
+function extractNavigoContractIdFromPath(pathname = location.pathname) {
+  const match = String(pathname || "").match(/\/(?:espace_client\/detail|attestation)\/([^/?#]+)/i);
+  return match?.[1] || null;
+}
+
+async function waitForNavigoPathMatch(pattern, timeoutMs) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (pattern.test(String(location.pathname || ""))) return true;
+    await wait(150);
+  }
+  return false;
+}
+
+async function clickNavigoSelector(selector, timeoutMs) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const button = pick([selector]);
+    if (button) {
+      realClick(button);
+      return true;
+    }
+    await wait(150);
+  }
+  return false;
+}
+
+async function navigateNavigoMonthlyPath(timeoutMs) {
+  const start = Date.now();
+
+  while (Date.now() - start < timeoutMs) {
+    if (isNavigoMonEspaceHome()) {
+      const monNavigoHref = resolveNavigoBillingEntryUrl();
+      if (monNavigoHref) {
+        return {
+          navigated: true,
+          detailUrl: monNavigoHref,
+          contractId: extractNavigoContractIdFromPath(new URL(monNavigoHref).pathname)
+        };
+      }
+    }
+
+    if (isNavigoAttestationPage()) {
+      return {
+        navigated: true,
+        detailUrl: location.href,
+        contractId: extractNavigoContractIdFromPath()
+      };
+    }
+
+    if (isNavigoDetailPage()) {
+      const attestationLink = normalizeUrl(pick(["#compte-user-detail-contrat-nav-2"])?.getAttribute("href"));
+      if (attestationLink) {
+        return {
+          navigated: true,
+          detailUrl: attestationLink,
+          contractId: extractNavigoContractIdFromPath(new URL(attestationLink).pathname)
+        };
+      }
+      const contractId = extractNavigoContractIdFromPath();
+      if (contractId) {
+        return {
+          navigated: true,
+          detailUrl: `https://www.jegeremacartenavigo.iledefrance-mobilites.fr/attestation/${contractId}`,
+          contractId
+        };
+      }
+      await wait(250);
+      continue;
+    }
+
+    if (isNavigoEspaceClientRoot()) {
+      const detailLink = normalizeUrl(
+        pick(["#compte-user-mon-espace-a-loop-1"])?.getAttribute("href")
+          || pick(["a[href*='/espace_client/detail/']"])?.getAttribute("href")
+      );
+      if (detailLink) {
+        return {
+          navigated: true,
+          detailUrl: detailLink,
+          contractId: extractNavigoContractIdFromPath(new URL(detailLink).pathname)
+        };
+      }
+      await wait(250);
+      continue;
+    }
+
+    const fallbackDetailLink = normalizeUrl(pick(["a[href*='/espace_client/detail/']"])?.getAttribute("href"));
+    if (fallbackDetailLink) {
+      return {
+        navigated: true,
+        detailUrl: fallbackDetailLink,
+        contractId: extractNavigoContractIdFromPath(new URL(fallbackDetailLink).pathname)
+      };
+    }
+
+    await wait(250);
+  }
+
+  return {
+    navigated: false,
+    reason: `timeout path=${location.pathname} hasRootButton=${Boolean(document.querySelector("#compte-user-mon-espace-a-loop-1"))} hasDetailButton=${Boolean(document.querySelector("#compte-user-detail-contrat-nav-2"))} hasDownloadButton=${Boolean(document.querySelector("#actes-payment-attestation-txt-5"))}`
+  };
+}
+
 async function clickNavigoBillingPath(timeoutMs) {
   const start = Date.now();
 
@@ -598,10 +732,14 @@ async function clickNavigoBillingPath(timeoutMs) {
 }
 
 async function findBestNavigoInvoiceControl(billingSelectors, timeoutMs) {
+  const monthlyButton = pick(["#actes-payment-attestation-txt-5"]);
+  if (monthlyButton && !monthlyButton.disabled) return monthlyButton;
+
   const opened = await openNavigoAttestationFlow(timeoutMs);
   if (!opened) return null;
 
   const explicitButton = pick([
+    "#actes-payment-attestation-txt-5",
     "button#download-certificate-btn",
     ".dropdown-menu #download-certificate-btn"
   ]);

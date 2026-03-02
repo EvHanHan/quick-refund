@@ -222,6 +222,7 @@
             "a[href*='.pdf']"
           ],
           downloadButton: [
+            "#actes-payment-attestation-txt-5",
             "a[href*='attestation'][href*='download']",
             "a[href*='attestation']",
             "a[href*='.pdf']",
