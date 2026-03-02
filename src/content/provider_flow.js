@@ -1014,6 +1014,8 @@ function isFreeMobileOtpRequired() {
   );
   if (hasExplicitOtpInput) return true;
 
+  if (hasFreeMobileOtpDigitInputs()) return true;
+
   const hasGenericOtpInput = Boolean(
     queryWithin(document, [
       "input[name*='otp']",
@@ -1023,18 +1025,7 @@ function isFreeMobileOtpRequired() {
     ])
   );
 
-  const text = normalizeText(document.body?.textContent || "");
-  const hasOtpChallengeText = (
-    text.includes("code de verification")
-    || text.includes("code de vérification")
-    || text.includes("saisissez le code")
-    || text.includes("entrer le code")
-    || text.includes("entrez le code")
-    || text.includes("code recu par sms")
-    || text.includes("code reçu par sms")
-    || text.includes("mot de passe a usage unique")
-    || text.includes("mot de passe à usage unique")
-  );
+  const hasOtpChallengeText = hasFreeMobileOtpChallengeText();
 
   // Avoid false positives from account pages (e.g. "SMS/MMS", "Mes codes promo").
   return hasGenericOtpInput && hasOtpChallengeText;
@@ -1380,7 +1371,7 @@ function setNativeInputValue(input, value) {
 }
 
 function getFreeMobileAuthDiagnostics() {
-  const text = normalizeText(document.body?.textContent || "");
+  const text = getFreeMobileAuthScopeText();
   const pathname = String(location.pathname || "");
   const onLoginRoute = /\/account\/v2\/login(?:\/|$)/.test(pathname);
   const inAccountArea = /^\/account\/v2(?:\/|$)/.test(pathname);
@@ -1414,6 +1405,66 @@ function getFreeMobileAuthDiagnostics() {
     hasInvoicesTab: Boolean(document.querySelector("button[aria-controls='invoices']")),
     authenticatedGuess
   };
+}
+
+function hasFreeMobileOtpChallengeText() {
+  const text = getFreeMobileAuthScopeText();
+  if (!text) return false;
+  return (
+    text.includes("code de verification")
+    || text.includes("code de vérification")
+    || text.includes("code de securite")
+    || text.includes("code de sécurité")
+    || text.includes("saisissez le code")
+    || text.includes("entrer le code")
+    || text.includes("entrez le code")
+    || text.includes("code recu par sms")
+    || text.includes("code reçu par sms")
+    || text.includes("mot de passe a usage unique")
+    || text.includes("mot de passe à usage unique")
+  );
+}
+
+function hasFreeMobileOtpDigitInputs() {
+  const hasSecurityCodeLabel = Boolean(
+    findByLooseText("code de securite")
+    || findByLooseText("code de sécurité")
+  );
+  if (!hasSecurityCodeLabel) return false;
+
+  const singleDigitInputs = Array.from(document.querySelectorAll("input"))
+    .filter((input) => {
+      if (!isVisible(input)) return false;
+      const maxLength = Number(input.getAttribute("maxlength") || 0);
+      const type = String(input.getAttribute("type") || "").toLowerCase();
+      const inputMode = String(input.getAttribute("inputmode") || "").toLowerCase();
+      const isSingleChar = maxLength === 1;
+      const acceptsDigitLike = type === "number" || type === "tel" || inputMode === "numeric" || inputMode === "decimal";
+      return isSingleChar || acceptsDigitLike;
+    });
+
+  return singleDigitInputs.length >= 4 && singleDigitInputs.length <= 8;
+}
+
+function getFreeMobileAuthScopeText() {
+  const roots = [
+    document.querySelector("main"),
+    document.querySelector("form"),
+    document.querySelector("[role='main']"),
+    document.querySelector("#app"),
+    document.querySelector("#root"),
+    document.body
+  ].filter(Boolean);
+
+  const chunks = [];
+  for (const root of roots) {
+    const raw = String(root.textContent || "").trim();
+    if (!raw) continue;
+    chunks.push(raw.slice(0, 4000));
+    if (chunks.length >= 2) break;
+  }
+
+  return normalizeText(chunks.join(" "));
 }
 
 function summarizeFreeMobileDiagnostics() {

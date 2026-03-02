@@ -718,6 +718,7 @@ function sleep(ms) {
 function startProviderLoginWatcher() {
   stopProviderLoginWatcher();
   const runId = flowContext.activeRunId;
+  const intervalMs = flowContext.runConfig?.Provider === "free_mobile_provider" ? 3500 : 1500;
   flowContext.providerLoginWatcher = setInterval(async () => {
     if (!isRunActive(runId)) {
       stopProviderLoginWatcher();
@@ -746,7 +747,7 @@ function startProviderLoginWatcher() {
     } catch (_error) {
       // keep polling
     }
-  }, 1500);
+  }, intervalMs);
 }
 
 function stopProviderLoginWatcher() {
