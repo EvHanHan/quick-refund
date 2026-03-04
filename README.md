@@ -6,3 +6,7 @@ This will help us track the number of downloads.
 ## How to use? 
 Video demo: 
 https://youtu.be/dusQxY_aq6s
+
+
+## Product story 
+https://github.com/EvHanHan/quick-refund/wiki/Product-story-%E2%80%90-the-why%3F
