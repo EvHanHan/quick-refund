@@ -9,4 +9,4 @@ https://youtu.be/dusQxY_aq6s
 
 
 ## Product story 
-https://github.com/EvHanHan/quick-refund/wiki/Product-story-%E2%80%90-the-why%3F
+wiki: https://github.com/EvHanHan/quick-refund/wiki/Product-story-%E2%80%90-the-why%3F
