@@ -1,4 +1,6 @@
 # 1-click Navan refund chrome extension 
+<img width="563" height="397" alt="SCR-20260305-jwkt" src="https://github.com/user-attachments/assets/48c0d281-5aed-41b5-9ffe-29ed95c47ed3" />
+
 ## Setup
 Go to the release section and download the lastest release. 
 This will help us track the number of downloads. 
