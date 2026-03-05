@@ -15,4 +15,6 @@ https://youtu.be/dusQxY_aq6s
 
 ## What does user say
 <img width="608" height="152" alt="image" src="https://github.com/user-attachments/assets/e42d33b1-e775-44fa-b536-67b727390963" />
+<img width="615" height="491" alt="image" src="https://github.com/user-attachments/assets/5e793f86-6cd5-4381-aaaa-ea908828ff84" />
+
 
