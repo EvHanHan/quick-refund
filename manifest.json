@@ -47,7 +47,18 @@
         "https://*.free.fr/*",
         "https://*.iledefrance-mobilites.fr/*"
       ],
-      "js": ["src/shared/providers.js", "src/shared/selectors.js", "src/content/provider_flow.js"],
+      "js": [
+        "src/shared/providers.js",
+        "src/shared/selectors.js",
+        "src/content/providers/registry.js",
+        "src/content/providers/generic.js",
+        "src/content/providers/orange_family.js",
+        "src/content/providers/redbysfr.js",
+        "src/content/providers/free.js",
+        "src/content/providers/free_mobile.js",
+        "src/content/providers/navigo.js",
+        "src/content/provider_flow.js"
+      ],
       "run_at": "document_idle"
     },
     {
