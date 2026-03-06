@@ -26,11 +26,13 @@ Private unpacked Chrome extension that:
 2. Logs into the provider and navigates billing.
 3. Downloads/extracts the billing document file.
 4. Opens Navan and pauses for user Google SSO.
-5. Navigates to update page where you can drag and drop to create a trasaction
+5. Automatically uploads the invoice document in Navan when PDF bytes are captured.
+6. Falls back to manual upload only if provider capture or Navan attachment fails.
 
 ## Security defaults
 - Flow state is cleared after completion/failure or 15 minutes inactivity.
 - User manually performs final submit in Navan.
+- Orange PDF byte capture uses Chrome DevTools Protocol (`debugger` permission).
 
 
 ## Notes
