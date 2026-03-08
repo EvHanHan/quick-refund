@@ -5,6 +5,7 @@ const LOGIN_CACHE_TTL_MS = 30 * 60 * 1000;
 const REMINDER_SETTINGS_KEY = "monthly_reminder_settings_v1";
 
 const startButton = document.getElementById("startFlow");
+const resumeButton = document.getElementById("resumeFlow");
 const stopButton = document.getElementById("stopFlow");
 const statusLine = document.getElementById("statusLine");
 const updateStatusLine = document.getElementById("updateStatus");
@@ -80,6 +81,16 @@ startButton.addEventListener("click", async () => {
   renderResponse(response);
 });
 
+resumeButton.addEventListener("click", async () => {
+  resumeButton.disabled = true;
+  const response = await sendMessage({
+    type: MessageType.RESUME_FLOW,
+    payload: {}
+  });
+  renderResponse(response);
+  resumeButton.disabled = false;
+});
+
 stopButton.addEventListener("click", async () => {
   stopButton.disabled = true;
   const response = await sendMessage({
@@ -117,6 +128,7 @@ function renderResponse(response) {
   renderUpdateStatus(data.updateStatus);
 
   const hasActiveFlow = data.state !== "IDLE" && data.state !== "DONE" && data.state !== "FAILED";
+  resumeButton.disabled = !data.waitingForUser;
   stopButton.disabled = !hasActiveFlow && !data.waitingForUser;
   updateInstructionBanner(data);
 

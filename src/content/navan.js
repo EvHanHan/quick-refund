@@ -1,4 +1,6 @@
 /* global chrome, __EXT_SELECTORS__ */
+const NAVAN_FORM_AUTOFILL_ENABLED = true;
+
 (function initNavanContent() {
   if (!location.hostname.includes("navan.com")) return;
 
@@ -18,8 +20,10 @@
     return true;
   });
 
-  setupNavanRouteWatcher();
-  scheduleAutoFillOnForm();
+  if (NAVAN_FORM_AUTOFILL_ENABLED) {
+    setupNavanRouteWatcher();
+    scheduleAutoFillOnForm();
+  }
 })();
 
 async function handleNavanAction(action, payload) {
@@ -133,32 +137,46 @@ async function uploadDocument(documentPayload) {
     };
   }
 
-  await wait(5_000);
-  const created = await waitAndClickCreateSingleTransaction(5_000);
-  if (!created) {
+  await wait(3_000);
+  const createFlow = await waitForCreateSingleTransactionFlow(20_000);
+  if (!createFlow.ok) {
     return {
       uploaded: false,
       manualUploadRequired: true,
       reason: "create_single_transaction_not_found",
-      debug: attached.debug || {}
+      debug: {
+        ...(attached.debug || {}),
+        ...(createFlow.debug || {})
+      }
     };
   }
 
-  const descriptionPrefilled = await waitForDescriptionPrefill(25_000);
-  if (descriptionPrefilled) {
-    setDescriptionFixed("monthly invoice");
-  }
+  let descriptionPrefilled = null;
+  let hintsApplied = false;
+  let expenseTypeSelected = false;
 
-  const hintsApplied = await applyNavanHints(navanHints);
-  const expenseTypeSelected = await finalizeExpenseTypeSelection(navanHints.expenseType);
+  if (NAVAN_FORM_AUTOFILL_ENABLED) {
+    if (createFlow.debug?.modalCleared === true) {
+      await wait(1_000);
+    }
+    descriptionPrefilled = await waitForDescriptionPrefill(3_000);
+    if (descriptionPrefilled) {
+      setDescriptionFixed("monthly invoice");
+    }
+
+    hintsApplied = await applyNavanHints(navanHints);
+    expenseTypeSelected = await finalizeExpenseTypeSelection(navanHints.expenseType);
+  }
   return {
     uploaded: true,
     attachedFileName: attached.fileName,
-    createSingleTransactionClicked: created,
+    createSingleTransactionClicked: createFlow.clicked,
     expenseTypeSelected,
     hintsApplied,
     debug: {
       ...(attached.debug || {}),
+      ...(createFlow.debug || {}),
+      autofillEnabled: NAVAN_FORM_AUTOFILL_ENABLED,
       descriptionPrefilled
     }
   };
@@ -300,6 +318,18 @@ function scheduleAutoFillOnForm() {
 
 function isNavanTransactionFormPage() {
   return location.pathname.includes("/transactions/new-redesign/");
+}
+
+function isNavanTransactionFormReady() {
+  if (!isNavanTransactionFormPage()) return false;
+
+  const s = window.__EXT_SELECTORS__.navan.transactionForm;
+  return Boolean(
+    queryAny(s.date, { allowHidden: true })
+    || queryAny(s.description, { allowHidden: true })
+    || findExpenseTypeInput()
+    || findCustomDescriptionInput()
+  );
 }
 
 function setupNavanRouteWatcher() {
@@ -627,6 +657,161 @@ async function waitAndClickCreateSingleTransaction(timeoutMs) {
   return false;
 }
 
+async function waitForCreateSingleTransactionFlow(timeoutMs) {
+  if (isNavanTransactionFormReady()) {
+    const modalWait = await waitForCreatingTransactionModalToClear(Math.min(8_000, timeoutMs));
+    return {
+      ok: true,
+      clicked: false,
+      debug: {
+        alreadyOnForm: true,
+        modalCleared: modalWait.cleared,
+        dismissNudgeCount: modalWait.dismissNudgeCount
+      }
+    };
+  }
+
+  const clicked = await waitAndClickCreateSingleTransaction(Math.min(8_000, timeoutMs));
+  if (!clicked) {
+    return {
+      ok: false,
+      clicked: false,
+      debug: {
+        alreadyOnForm: false,
+        formReady: isNavanTransactionFormReady(),
+        modalVisible: isCreatingTransactionModalVisible()
+      }
+    };
+  }
+
+  const formReady = await waitForTransactionFormReady(timeoutMs);
+  const modalWait = formReady
+    ? await waitForCreatingTransactionModalToClear(Math.min(15_000, timeoutMs))
+    : { cleared: false, dismissNudgeCount: 0 };
+  return {
+    ok: formReady,
+    clicked: true,
+    debug: {
+      alreadyOnForm: false,
+      formReady,
+      modalCleared: modalWait.cleared,
+      modalStillVisible: formReady && !modalWait.cleared,
+      dismissNudgeCount: modalWait.dismissNudgeCount
+    }
+  };
+}
+
+async function waitForTransactionFormReady(timeoutMs) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (isNavanTransactionFormReady()) return true;
+    await wait(250);
+  }
+  return false;
+}
+
+async function waitForCreatingTransactionModalToClear(timeoutMs) {
+  const start = Date.now();
+  const deadline = start + timeoutMs;
+  let pollCount = 0;
+  let dismissNudgeCount = 0;
+
+  while (Date.now() < deadline) {
+    const visible = isCreatingTransactionModalVisible();
+    if (visible) {
+      if (shouldNudgeModalDismiss(Date.now() - start, pollCount)) {
+        nudgeCreatingTransactionModalDismiss();
+        dismissNudgeCount += 1;
+      }
+    }
+    if (!visible) {
+      return { cleared: true, dismissNudgeCount };
+    }
+    pollCount += 1;
+    await wait(250);
+  }
+  return { cleared: false, dismissNudgeCount };
+}
+
+function isCreatingTransactionModalVisible() {
+  const textNode = findCreatingTransactionTextNode();
+  const lottieNode = findCreatingTransactionLottieNode();
+  const root = resolveModalRoot(textNode || lottieNode);
+  return Boolean(root && isVisible(root));
+}
+
+function findCreatingTransactionTextNode() {
+  const nodes = Array.from(document.querySelectorAll("h1,h2,h3,div,span,p"));
+  return nodes.find((node) => isVisible(node) && normalizeText(node.textContent).includes("creating a transaction")) || null;
+}
+
+function findCreatingTransactionLottieNode() {
+  const node = querySelectorDeep("#animation-container.main, [aria-label*='Lottie animation'], lottie-player");
+  return (node && isVisible(node)) ? node : null;
+}
+
+function resolveModalRoot(node) {
+  if (!node) return null;
+  const root = node.closest?.(
+    "[role='dialog'], .modal-container, .cdk-overlay-pane, .cdk-global-overlay-wrapper, pb-modal, section[class*='modal'], div[class*='modal']"
+  );
+  return root || node;
+}
+
+function shouldNudgeModalDismiss(elapsedMs, pollCount) {
+  if (!isNavanTransactionFormPage()) return false;
+  if (elapsedMs < 1000) return false;
+  return pollCount % 4 === 0;
+}
+
+function nudgeCreatingTransactionModalDismiss() {
+  clickNavanModalBackdrop();
+  dispatchEscapeKey();
+  clickFarRightOfPage();
+  clickPageSide();
+}
+
+function dispatchEscapeKey() {
+  const target = document.activeElement || document.body;
+  if (!target) return;
+  target.dispatchEvent(new KeyboardEvent("keydown", {
+    key: "Escape",
+    code: "Escape",
+    bubbles: true,
+    cancelable: true
+  }));
+  target.dispatchEvent(new KeyboardEvent("keyup", {
+    key: "Escape",
+    code: "Escape",
+    bubbles: true,
+    cancelable: true
+  }));
+}
+
+function clickNavanModalBackdrop() {
+  const candidates = Array.from(document.querySelectorAll(
+    ".cdk-overlay-backdrop, .cdk-overlay-container, .cdk-global-overlay-wrapper, [role='dialog']"
+  ));
+  for (const node of candidates) {
+    if (!(node instanceof HTMLElement) || !isVisible(node)) continue;
+    const style = window.getComputedStyle(node);
+    if (!style || style.pointerEvents === "none") continue;
+    clickElementCenter(node);
+    break;
+  }
+}
+
+function clickElementCenter(target) {
+  const rect = target.getBoundingClientRect();
+  if (!rect.width || !rect.height) return;
+  const x = rect.left + rect.width / 2;
+  const y = rect.top + rect.height / 2;
+  target.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0 }));
+  target.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0 }));
+  target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0 }));
+  target.click?.();
+}
+
 function findCreateSingleTransactionButton() {
   const selectors = window.__EXT_SELECTORS__.navan.home.createSingleTransaction || [];
   const bySelectors = queryAny(selectors);
@@ -644,11 +829,20 @@ function findCreateSingleTransactionButton() {
 }
 
 async function finalizeExpenseTypeSelection(expenseTypeHint) {
-  await wait(15_000);
+  await waitForExpenseTypeSectionReady(5_000);
   clickDraftTag();
-  await wait(400);
+  await wait(250);
   const desiredType = normalizeText(expenseTypeHint || "work from home");
-  return selectExpenseTypeByLabel(desiredType, 20_000);
+  return selectExpenseTypeByLabel(desiredType, 8_000);
+}
+
+async function waitForExpenseTypeSectionReady(timeoutMs) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (findExpenseTypeInput()) return true;
+    await wait(250);
+  }
+  return false;
 }
 
 function clickPageSide() {

@@ -237,6 +237,8 @@ async function resumeFlow(payload) {
     ? "User resumed after Orange captcha"
     : resumedReason === "PROVIDER_MANUAL_LOGIN"
       ? "User resumed after provider manual login"
+      : resumedReason === "NAVAN_MODAL_STUCK"
+        ? "User resumed after Navan processing modal"
     : resumedReason === "NAVAN_MANUAL_UPLOAD"
       ? "User resumed after manual Navan upload"
       : "User resumed after Navan SSO checkpoint";
@@ -564,8 +566,19 @@ async function runStep(state) {
         emitEvent(
           FlowState.UPLOAD_DOCUMENT,
           FlowStatus.STARTED,
-          `Navan upload result (uploaded=${Boolean(uploadResult?.uploaded)} manual=${Boolean(uploadResult?.manualUploadRequired)} reason=${uploadResult?.reason || "none"} file=${uploadResult?.attachedFileName || "none"} debug=${JSON.stringify(uploadResult?.debug || {})})`
+          `Navan upload result (uploaded=${Boolean(uploadResult?.uploaded)} manual=${Boolean(uploadResult?.manualUploadRequired)} reason=${uploadResult?.reason || "none"} file=${uploadResult?.attachedFileName || "none"} modalCleared=${uploadResult?.debug?.modalCleared === undefined ? "n/a" : Boolean(uploadResult?.debug?.modalCleared)} modalStillVisible=${uploadResult?.debug?.modalStillVisible === undefined ? "n/a" : Boolean(uploadResult?.debug?.modalStillVisible)} nudges=${Number(uploadResult?.debug?.dismissNudgeCount || 0)})`
         );
+        const modalStillVisible = Boolean(uploadResult?.debug?.modalStillVisible);
+        if (modalStillVisible) {
+          flowContext.waitingForUser = true;
+          flowContext.waitingReason = "NAVAN_MODAL_STUCK";
+          emitEvent(
+            FlowState.UPLOAD_DOCUMENT,
+            FlowStatus.WAITING_USER,
+            "Navan is still showing the processing modal. Dismiss it in Navan, then click Resume."
+          );
+          return;
+        }
         if (uploadResult?.manualUploadRequired) {
           flowContext.waitingForUser = true;
           flowContext.waitingReason = "NAVAN_MANUAL_UPLOAD";
