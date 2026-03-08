@@ -1,5 +1,6 @@
 /* global chrome, __EXT_SELECTORS__ */
-const NAVAN_FORM_AUTOFILL_ENABLED = true;
+const NAVAN_UPLOAD_AUTOFILL_ENABLED = false;
+const NAVAN_ROUTE_WATCHER_AUTOFILL_ENABLED = true;
 
 (function initNavanContent() {
   if (!location.hostname.includes("navan.com")) return;
@@ -20,7 +21,7 @@ const NAVAN_FORM_AUTOFILL_ENABLED = true;
     return true;
   });
 
-  if (NAVAN_FORM_AUTOFILL_ENABLED) {
+  if (NAVAN_ROUTE_WATCHER_AUTOFILL_ENABLED) {
     setupNavanRouteWatcher();
     scheduleAutoFillOnForm();
   }
@@ -154,10 +155,11 @@ async function uploadDocument(documentPayload) {
   let descriptionPrefilled = null;
   let hintsApplied = false;
   let expenseTypeSelected = false;
+  let expenseTypeDebug = null;
 
-  if (NAVAN_FORM_AUTOFILL_ENABLED) {
+  if (NAVAN_UPLOAD_AUTOFILL_ENABLED) {
     if (createFlow.debug?.modalCleared === true) {
-      await wait(1_000);
+      await wait(3_000);
     }
     descriptionPrefilled = await waitForDescriptionPrefill(3_000);
     if (descriptionPrefilled) {
@@ -165,7 +167,9 @@ async function uploadDocument(documentPayload) {
     }
 
     hintsApplied = await applyNavanHints(navanHints);
-    expenseTypeSelected = await finalizeExpenseTypeSelection(navanHints.expenseType);
+    const expenseTypeResult = await finalizeExpenseTypeSelection(navanHints.expenseType);
+    expenseTypeSelected = Boolean(expenseTypeResult?.selected);
+    expenseTypeDebug = expenseTypeResult?.debug || null;
   }
   return {
     uploaded: true,
@@ -176,8 +180,10 @@ async function uploadDocument(documentPayload) {
     debug: {
       ...(attached.debug || {}),
       ...(createFlow.debug || {}),
-      autofillEnabled: NAVAN_FORM_AUTOFILL_ENABLED,
-      descriptionPrefilled
+      uploadAutofillEnabled: NAVAN_UPLOAD_AUTOFILL_ENABLED,
+      routeWatcherAutofillEnabled: NAVAN_ROUTE_WATCHER_AUTOFILL_ENABLED,
+      descriptionPrefilled,
+      expenseTypeDebug
     }
   };
 }
@@ -296,10 +302,30 @@ function scheduleAutoFillOnForm() {
   window.__NAVAN_AUTOFILL_RUNNING = true;
   const maxWaitMs = 60_000;
   const pollMs = 500;
+  const settleAfterModalMs = 1_500;
   const start = Date.now();
+  let modalWasVisible = false;
+  let postModalSettled = false;
 
   const tick = async () => {
     if (window.__NAVAN_AUTOFILL_DONE) return;
+    if (isCreatingTransactionModalVisible()) {
+      modalWasVisible = true;
+      postModalSettled = false;
+      if (Date.now() - start < maxWaitMs) {
+        setTimeout(tick, pollMs);
+      } else {
+        window.__NAVAN_AUTOFILL_RUNNING = false;
+      }
+      return;
+    }
+
+    if (modalWasVisible && !postModalSettled) {
+      postModalSettled = true;
+      await wait(settleAfterModalMs);
+      if (window.__NAVAN_AUTOFILL_DONE) return;
+    }
+
     const ready = await tryAutoFillExpenseThenDescription();
     if (ready) {
       window.__NAVAN_AUTOFILL_DONE = true;
@@ -395,19 +421,8 @@ async function ensureExpenseTypeSelected(expenseTypeLabel) {
     return true;
   }
 
-  openExpenseTypeDropdown(input);
-  await wait(200);
-  await scrollExpenseTypeListToEnd(3000);
-
-  const desired = normalizeComparableText(expenseTypeLabel || "");
-  typeExpenseTypeQuery(input, expenseTypeLabel || "");
-  const option = await waitForExpenseTypeOption(desired, 8000);
-  if (!option) return false;
-  realClick(option);
-  await wait(400);
-
-  const updated = normalizeComparableText(input.value || "");
-  return updated.includes("work from home") || updated.includes("teletravail");
+  const result = await typeExpenseTypeOnlyWithDebug(expenseTypeLabel || "work from home");
+  return Boolean(result?.typed);
 }
 
 function openExpenseTypeDropdown(input) {
@@ -429,6 +444,16 @@ function typeExpenseTypeQuery(input, label) {
   input.value = value;
   input.dispatchEvent(new Event("input", { bubbles: true }));
   input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true }));
+}
+
+function typeExpenseTypeQueryOnly(input, label) {
+  if (!input) return;
+  const value = String(label || "");
+  input.focus?.();
+  input.value = "";
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.value = value;
+  input.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
 async function waitForExpenseTypeOption(looseTarget, timeoutMs) {
@@ -832,8 +857,44 @@ async function finalizeExpenseTypeSelection(expenseTypeHint) {
   await waitForExpenseTypeSectionReady(5_000);
   clickDraftTag();
   await wait(250);
-  const desiredType = normalizeText(expenseTypeHint || "work from home");
-  return selectExpenseTypeByLabel(desiredType, 8_000);
+  const desiredType = String(expenseTypeHint || "work from home").trim() || "work from home";
+  const typedResult = await typeExpenseTypeOnlyWithDebug(desiredType);
+  return {
+    selected: false,
+    debug: {
+      ...(typedResult?.debug || {}),
+      manualOptionClickRequired: true
+    }
+  };
+}
+
+async function typeExpenseTypeOnlyWithDebug(optionText) {
+  const input = findExpenseTypeInput();
+  if (!input) {
+    return {
+      typed: false,
+      debug: {
+        reason: "input_not_found",
+        typedLabel: String(optionText || "")
+      }
+    };
+  }
+
+  const typedLabel = normalizeComparableText(optionText || "");
+  realClick(input);
+  input.focus?.();
+  await wait(200);
+  typeExpenseTypeQueryOnly(input, optionText || "");
+  await wait(200);
+
+  return {
+    typed: true,
+    debug: {
+      typedOnly: true,
+      typedLabel,
+      finalValue: normalizeComparableText(input?.value || "")
+    }
+  };
 }
 
 async function waitForExpenseTypeSectionReady(timeoutMs) {
@@ -917,6 +978,72 @@ async function selectExpenseTypeByLabel(optionText, timeoutMs) {
   return false;
 }
 
+async function selectExpenseTypeByTypingAndFirstOption(optionText, timeoutMs) {
+  const result = await selectExpenseTypeByTypingAndFirstOptionWithDebug(optionText, timeoutMs);
+  return Boolean(result?.selected);
+}
+
+async function selectExpenseTypeByTypingAndFirstOptionWithDebug(optionText, timeoutMs) {
+  const input = findExpenseTypeInput();
+  if (!input) {
+    return { selected: false, debug: { reason: "input_not_found", typedLabel: String(optionText || "") } };
+  }
+
+  const typedLabel = normalizeComparableText(optionText || "");
+  realClick(input);
+  input.focus?.();
+  await wait(200);
+  typeExpenseTypeQueryOnly(input, optionText || "");
+
+  const option = await waitForFirstExpenseTypeOption(timeoutMs);
+  if (!option) {
+    return {
+      selected: false,
+      debug: {
+        reason: "no_dropdown_option",
+        typedLabel,
+        optionCount: getRawExpenseTypeOptionNodes().length,
+        finalValue: normalizeComparableText(input?.value || "")
+      }
+    };
+  }
+  const optionLabel = normalizeComparableText(option.textContent || "");
+  const typedValueBeforeClick = normalizeComparableText(input?.value || "");
+  realClick(option);
+  const confirmed = await waitForExpenseTypeSelection(input, optionLabel, typedValueBeforeClick, 2_000);
+  if (confirmed) {
+    return {
+      selected: true,
+      debug: {
+        typedLabel,
+        clickedOption: optionLabel || "unknown",
+        confirmedAfterClick: true,
+        confirmedAfterEnter: false,
+        usedEnterFallback: false,
+        optionClickedTag: String(option.tagName || "").toLowerCase(),
+        optionClickedClass: String(option.className || "").slice(0, 80),
+        finalValue: normalizeComparableText(input?.value || "")
+      }
+    };
+  }
+
+  input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true }));
+  const confirmedAfterEnter = await waitForExpenseTypeSelection(input, optionLabel, typedValueBeforeClick, 1_500);
+  return {
+    selected: confirmedAfterEnter,
+    debug: {
+      typedLabel,
+      clickedOption: optionLabel || "unknown",
+      confirmedAfterClick: false,
+      confirmedAfterEnter,
+      usedEnterFallback: true,
+      optionClickedTag: String(option.tagName || "").toLowerCase(),
+      optionClickedClass: String(option.className || "").slice(0, 80),
+      finalValue: normalizeComparableText(input?.value || "")
+    }
+  };
+}
+
 function findExpenseTypeInput() {
   const byTestId = querySelectorDeep("[data-testid='expense-type-form'] input[type='text']");
   if (byTestId) return byTestId;
@@ -937,15 +1064,54 @@ function findExpenseTypeOption(looseTarget) {
   }) || null;
 }
 
+async function waitForFirstExpenseTypeOption(timeoutMs) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const candidates = getExpenseTypeOptionCandidates();
+    if (candidates.length > 0) return candidates[0];
+    await wait(250);
+  }
+  return null;
+}
+
+async function waitForExpenseTypeSelection(input, optionLabel, initialValue, timeoutMs) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const current = normalizeComparableText(input?.value || "");
+    if (!current) {
+      await wait(200);
+      continue;
+    }
+    const dropdownOpen = isExpenseTypeDropdownOpen();
+    const valueChangedAfterClick = initialValue ? current !== initialValue : true;
+    if (!dropdownOpen && valueChangedAfterClick) return true;
+    if (!dropdownOpen && optionLabel && (current.includes(optionLabel) || optionLabel.includes(current))) return true;
+    await wait(200);
+  }
+  return false;
+}
+
 function getExpenseTypeOptionCandidates() {
+  const nodes = getRawExpenseTypeOptionNodes();
+  return nodes
+    .map((node) => resolveClickableTarget(node))
+    .filter((node, index, arr) => node && arr.indexOf(node) === index);
+}
+
+function getRawExpenseTypeOptionNodes() {
   const overlayRoot = document.querySelector(".cdk-overlay-container") || document.body;
-  const candidates = Array.from(overlayRoot.querySelectorAll("[role='option'],li,button,div,span"));
+  const candidates = Array.from(overlayRoot.querySelectorAll(
+    "[role='option'], li[role='option'], li[aria-selected], button[role='option'], pb-option, [id^='pb-option-'], .options-wrapper .option"
+  ));
   return candidates.filter((node) => {
+    if (!(node instanceof HTMLElement)) return false;
     if (!isVisible(node)) return false;
-    const text = normalizeComparableText(node.textContent);
-    if (!text || text.length < 2 || text.length > 80) return false;
     return true;
   });
+}
+
+function isExpenseTypeDropdownOpen() {
+  return getRawExpenseTypeOptionNodes().length > 0;
 }
 
 function normalizeComparableText(value) {
