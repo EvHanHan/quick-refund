@@ -5,13 +5,10 @@ const LOGIN_CACHE_TTL_MS = 30 * 60 * 1000;
 const REMINDER_SETTINGS_KEY = "monthly_reminder_settings_v1";
 
 const startButton = document.getElementById("startFlow");
-const resumeButton = document.getElementById("resumeFlow");
-const stopButton = document.getElementById("stopFlow");
 const statusLine = document.getElementById("statusLine");
 const updateStatusLine = document.getElementById("updateStatus");
 const eventLog = document.getElementById("eventLog");
 const instructionBanner = document.getElementById("instructionBanner");
-const testReminderButton = document.getElementById("testReminder");
 const showStatusInput = document.getElementById("ShowStatus");
 const statusSection = document.getElementById("statusSection");
 const AccountTypeInput = document.getElementById("AccountType");
@@ -41,18 +38,6 @@ window.addEventListener("beforeunload", persistLoginDraft);
 MonthlyReminderEnabledInput.addEventListener("change", () => {
   void updateReminderSettings(MonthlyReminderEnabledInput.checked);
 });
-testReminderButton.addEventListener("click", async () => {
-  testReminderButton.disabled = true;
-  const response = await sendMessage({
-    type: MessageType.TRIGGER_REMINDER_TEST
-  });
-  if (!response?.ok) {
-    statusLine.textContent = `Error: ${response?.error?.message || "Unable to trigger reminder test"}`;
-  }
-  setTimeout(() => {
-    testReminderButton.disabled = false;
-  }, 1500);
-});
 showStatusInput.addEventListener("change", () => {
   setStatusVisibility(showStatusInput.checked);
 });
@@ -81,26 +66,6 @@ startButton.addEventListener("click", async () => {
   renderResponse(response);
 });
 
-resumeButton.addEventListener("click", async () => {
-  resumeButton.disabled = true;
-  const response = await sendMessage({
-    type: MessageType.RESUME_FLOW,
-    payload: {}
-  });
-  renderResponse(response);
-  resumeButton.disabled = false;
-});
-
-stopButton.addEventListener("click", async () => {
-  stopButton.disabled = true;
-  const response = await sendMessage({
-    type: MessageType.STOP_FLOW,
-    payload: {}
-  });
-  renderResponse(response);
-  stopButton.disabled = false;
-});
-
 chrome.runtime.onMessage.addListener((message) => {
   if (message?.type === MessageType.FLOW_EVENT) {
     pollStatus();
@@ -127,9 +92,6 @@ function renderResponse(response) {
   statusLine.textContent = `${data.state} (${data.status})`;
   renderUpdateStatus(data.updateStatus);
 
-  const hasActiveFlow = data.state !== "IDLE" && data.state !== "DONE" && data.state !== "FAILED";
-  resumeButton.disabled = !data.waitingForUser;
-  stopButton.disabled = !hasActiveFlow && !data.waitingForUser;
   updateInstructionBanner(data);
 
   const events = data.events || [];

@@ -8,12 +8,25 @@
   </head>
   <body>
     <main>
-      <h1>1-click navan refund</h1>
-      <p class="notice">You will be redirected to the provider page to log in. The flow resumes automatically after login.</p>
-      <p class="share">
-        Share with others:
-        <a href="https://github.com/EvHanHan/quick-refund/releases" target="_blank" rel="noopener noreferrer">Download link</a>
-      </p>
+      <div class="titleRow">
+        <h1>1-click navan refund</h1>
+        <p class="share">
+          <a
+            href="https://github.com/EvHanHan/quick-refund/releases"
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="Share"
+            title="Share"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path
+                d="M18 16a3 3 0 0 0-2.39 1.2L8.91 13.7a3.1 3.1 0 0 0 0-3.4l6.7-3.5A3 3 0 1 0 15 5a3 3 0 0 0 .06.6l-6.7 3.5a3 3 0 1 0 0 5.8l6.7 3.5A3 3 0 1 0 18 16Z"
+                fill="currentColor"
+              />
+            </svg>
+          </a>
+        </p>
+      </div>
 
       <label>
         Provider
@@ -42,13 +55,12 @@
           <input id="MonthlyReminderEnabled" type="checkbox" checked />
           Monthly reminder (first Monday 12:00)
         </label>
-        <button id="testReminder" class="smallButton">Preview Reminder</button>
       </div>
 
       <div class="actions">
-        <button id="startFlow">Start Flow</button>
-        <button id="resumeFlow">Resume</button>
-        <button id="stopFlow">Stop</button>
+        <button id="startFlow" class="startFlowButton" aria-label="Refund" title="Refund">
+          <span>Refund</span>
+        </button>
       </div>
 
       <div id="instructionBanner" class="instruction hidden"></div>
