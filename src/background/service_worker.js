@@ -82,9 +82,9 @@ void scheduleMonthlyReminder();
 void refreshReminderBadge();
 
 const stateOrder = [
-  FlowState.OPEN_ORANGE_LOGIN,
-  FlowState.AUTH_ORANGE,
-  FlowState.NAVIGATE_ORANGE_BILLING,
+  FlowState.OPEN_PROVIDER_LOGIN,
+  FlowState.AUTH_PROVIDER,
+  FlowState.NAVIGATE_PROVIDER_BILLING,
   FlowState.DOWNLOAD_OR_SELECT_BILL,
   FlowState.OPEN_NAVAN,
   FlowState.OPEN_LIQUID_HOME,
@@ -211,7 +211,7 @@ async function startFlow(runConfig) {
   };
 
   emitEvent(
-    FlowState.CAPTURE_ORANGE_CREDENTIALS,
+    FlowState.CAPTURE_PROVIDER_CREDENTIALS,
     FlowStatus.SUCCESS,
     "Flow settings captured for this run"
   );
@@ -291,16 +291,16 @@ async function runStateMachine(runId) {
 async function runStep(state) {
   const providerConfig = PROVIDER_CONFIGS[flowContext.runConfig.Provider] || PROVIDER_CONFIGS.orange_provider;
   switch (state) {
-    case FlowState.OPEN_ORANGE_LOGIN:
+    case FlowState.OPEN_PROVIDER_LOGIN:
       flowContext.orangeTabId = await ensureTab(
         providerConfig.loginUrl,
         flowContext.orangeTabId
       );
       return;
-    case FlowState.AUTH_ORANGE:
+    case FlowState.AUTH_PROVIDER:
       {
         emitEvent(
-          FlowState.AUTH_ORANGE,
+          FlowState.AUTH_PROVIDER,
           FlowStatus.STARTED,
           `Provider action CHECK_PROVIDER_SESSION (provider=${flowContext.runConfig.Provider}, timeout=${TIMEOUTS_MS.DEFAULT}ms)`
         );
@@ -308,13 +308,13 @@ async function runStep(state) {
           Provider: flowContext.runConfig.Provider
         }, TIMEOUTS_MS.DEFAULT);
         emitEvent(
-          FlowState.AUTH_ORANGE,
+          FlowState.AUTH_PROVIDER,
           FlowStatus.STARTED,
           `Provider action CHECK_PROVIDER_SESSION completed (authenticated=${Boolean(session?.authenticated)})`
         );
         if (flowContext.runConfig.Provider === "free_mobile_provider" && session?.diagnostics) {
           emitEvent(
-            FlowState.AUTH_ORANGE,
+            FlowState.AUTH_PROVIDER,
             FlowStatus.STARTED,
             `Free Mobile session probe: auth=${Boolean(session?.authenticated)} | ${formatFreeMobileDiagnostics(session.diagnostics)}`
           );
@@ -322,7 +322,7 @@ async function runStep(state) {
         if (session?.authenticated) {
           clearRunPassword();
           emitEvent(
-            FlowState.AUTH_ORANGE,
+            FlowState.AUTH_PROVIDER,
             FlowStatus.SUCCESS,
             `${flowContext.runConfig.Provider} session already active, skipping login${flowContext.runConfig.Provider === "free_mobile_provider" && session?.diagnostics ? ` | ${formatFreeMobileDiagnostics(session.diagnostics)}` : ""}`
           );
@@ -330,7 +330,7 @@ async function runStep(state) {
         }
 
         emitEvent(
-          FlowState.AUTH_ORANGE,
+          FlowState.AUTH_PROVIDER,
           FlowStatus.STARTED,
           `Provider action AUTH_PROVIDER (provider=${flowContext.runConfig.Provider}, timeout=${TIMEOUTS_MS.DEFAULT}ms)`
         );
@@ -338,13 +338,13 @@ async function runStep(state) {
           Provider: flowContext.runConfig.Provider
         }, TIMEOUTS_MS.DEFAULT);
         emitEvent(
-          FlowState.AUTH_ORANGE,
+          FlowState.AUTH_PROVIDER,
           FlowStatus.STARTED,
           `Provider action AUTH_PROVIDER completed (authenticated=${Boolean(authResult?.authenticated)} manual=${Boolean(authResult?.manualLoginRequired)} captcha=${Boolean(authResult?.captchaRequired)})`
         );
         if (flowContext.runConfig.Provider === "free_mobile_provider") {
           emitEvent(
-            FlowState.AUTH_ORANGE,
+            FlowState.AUTH_PROVIDER,
             FlowStatus.STARTED,
             `Free Mobile auth result: manual=${Boolean(authResult?.manualLoginRequired)} captcha=${Boolean(authResult?.captchaRequired)} otp=${Boolean(authResult?.smsCodeRequired)}`
           );
@@ -354,7 +354,7 @@ async function runStep(state) {
           flowContext.waitingForUser = true;
           flowContext.waitingReason = "PROVIDER_MANUAL_LOGIN";
           emitEvent(
-            FlowState.AUTH_ORANGE,
+            FlowState.AUTH_PROVIDER,
             FlowStatus.WAITING_USER,
             "Finish login in provider tab. The flow resumes automatically after provider login is detected."
           );
@@ -362,13 +362,13 @@ async function runStep(state) {
         } else if (authResult?.captchaRequired) {
           flowContext.waitingForUser = true;
           flowContext.waitingReason = "ORANGE_CAPTCHA";
-          emitEvent(FlowState.AUTH_ORANGE, FlowStatus.WAITING_USER, "Captcha detected on provider. Solve it in the tab, or click Stop to cancel.");
+          emitEvent(FlowState.AUTH_PROVIDER, FlowStatus.WAITING_USER, "Captcha detected on provider. Solve it in the tab, or click Stop to cancel.");
         } else {
           clearRunPassword();
         }
       }
       return;
-    case FlowState.NAVIGATE_ORANGE_BILLING:
+    case FlowState.NAVIGATE_PROVIDER_BILLING:
       // Free ADSL uses session params in URL (ex: idt), avoid overriding current session page.
       if (
         flowContext.runConfig.Provider !== "free_provider"
@@ -382,7 +382,7 @@ async function runStep(state) {
       }
       {
         emitEvent(
-          FlowState.NAVIGATE_ORANGE_BILLING,
+          FlowState.NAVIGATE_PROVIDER_BILLING,
           FlowStatus.STARTED,
           `Provider action NAVIGATE_BILLING (provider=${flowContext.runConfig.Provider}, timeout=${TIMEOUTS_MS.DEFAULT}ms)`
         );
@@ -391,7 +391,7 @@ async function runStep(state) {
         AccountType: flowContext.runConfig.AccountType
       }, TIMEOUTS_MS.DEFAULT);
         emitEvent(
-          FlowState.NAVIGATE_ORANGE_BILLING,
+          FlowState.NAVIGATE_PROVIDER_BILLING,
           FlowStatus.STARTED,
           `Provider action NAVIGATE_BILLING completed (navigated=${Boolean(navigation?.navigated)} detailUrl=${navigation?.detailUrl || "none"})`
         );
@@ -406,7 +406,7 @@ async function runStep(state) {
             if (onPrelevements) break;
 
             emitEvent(
-              FlowState.NAVIGATE_ORANGE_BILLING,
+              FlowState.NAVIGATE_PROVIDER_BILLING,
               FlowStatus.STARTED,
               `Navigo extra NAVIGATE_BILLING pass ${attempt}/2`
             );
@@ -415,7 +415,7 @@ async function runStep(state) {
               AccountType: flowContext.runConfig.AccountType
             }, TIMEOUTS_MS.DEFAULT);
             emitEvent(
-              FlowState.NAVIGATE_ORANGE_BILLING,
+              FlowState.NAVIGATE_PROVIDER_BILLING,
               FlowStatus.STARTED,
               `Navigo extra pass ${attempt}/2 resolved detailUrl=${navigation?.detailUrl || "none"}`
             );
@@ -1504,7 +1504,7 @@ function startProviderLoginWatcher() {
       flowContext.waitingForUser = false;
       flowContext.waitingReason = null;
       stopProviderLoginWatcher();
-      emitEvent(FlowState.AUTH_ORANGE, FlowStatus.SUCCESS, "Provider billing page detected (Vos factures). Continuing flow.");
+      emitEvent(FlowState.AUTH_PROVIDER, FlowStatus.SUCCESS, "Provider billing page detected (Vos factures). Continuing flow.");
       runStateMachine(runId).catch((error) => failFlow(error, runId));
     } catch (_error) {
       // keep polling
