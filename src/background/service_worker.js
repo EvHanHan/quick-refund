@@ -23,6 +23,9 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const UPDATE_STATUS_KEY = "manifest_update_status_v1";
 const REPO_MANIFEST_URL = "https://raw.githubusercontent.com/MrCerise/dataiku-navan/main/manifest.json";
 const UPLOAD_ACTION_TIMEOUT_MS = 120_000;
+const ORANGE_PDF_CAPTURE_TIMEOUT_MS = 20_000;
+const DEBUGGER_PROTOCOL_VERSION = "1.3";
+const ORANGE_PDF_FETCH_URL_PATTERN = "*://espace-client.orange.fr/ecd_wp/facture/v1.0/pdf*";
 const PROVIDER_CONFIGS = {
   orange_provider: {
     loginUrl: "https://espace-client.orange.fr/selectionner-un-contrat?returnUrl=%2Ffacture-paiement%2F%257B%257Bcid%257D%257D&marketType=RES",
@@ -83,7 +86,11 @@ const stateOrder = [
   FlowState.AUTH_ORANGE,
   FlowState.NAVIGATE_ORANGE_BILLING,
   FlowState.DOWNLOAD_OR_SELECT_BILL,
-  FlowState.OPEN_NAVAN
+  FlowState.OPEN_NAVAN,
+  FlowState.OPEN_LIQUID_HOME,
+  FlowState.CLICK_NEW_TRANSACTION,
+  FlowState.UPLOAD_DOCUMENT,
+  FlowState.REVIEW_AND_CONFIRM
 ];
 
 const flowContext = {
@@ -422,9 +429,24 @@ async function runStep(state) {
         FlowStatus.STARTED,
         `Provider action DOWNLOAD_AND_EXTRACT_BILL (provider=${flowContext.runConfig.Provider}, timeout=${TIMEOUTS_MS.LONG}ms)`
       );
-      const result = await runProviderAction("DOWNLOAD_AND_EXTRACT_BILL", flowContext.orangeTabId, {
-        Provider: flowContext.runConfig.Provider
-      }, TIMEOUTS_MS.LONG);
+      const shouldCaptureOrangePdf = flowContext.runConfig.Provider === "orange_provider";
+      const debuggerCapture = shouldCaptureOrangePdf
+        ? await startOrangePdfNetworkCapture(flowContext.orangeTabId)
+        : null;
+      let result;
+      let captureData = null;
+      try {
+        result = await runProviderAction("DOWNLOAD_AND_EXTRACT_BILL", flowContext.orangeTabId, {
+          Provider: flowContext.runConfig.Provider
+        }, TIMEOUTS_MS.LONG);
+        if (debuggerCapture) {
+          captureData = await debuggerCapture.waitForDataUrl(ORANGE_PDF_CAPTURE_TIMEOUT_MS);
+        }
+      } finally {
+        if (debuggerCapture) {
+          await debuggerCapture.dispose();
+        }
+      }
       emitEvent(
         FlowState.DOWNLOAD_OR_SELECT_BILL,
         FlowStatus.STARTED,
@@ -441,7 +463,66 @@ async function runStep(state) {
       if (!result?.document) {
         throw new FlowError(ErrorCode.ORANGE_BILL_NOT_FOUND, "Could not find downloadable billing document");
       }
-      flowContext.documentPayload = result.document;
+      if (debuggerCapture) {
+        if (captureData?.pdfUrl && !captureData?.dataUrl) {
+          const preferredPdfUrl = selectPreferredOrangePdfUrl(captureData);
+          const originalPdfUrl = captureData.pdfUrl;
+          captureData.pdfUrl = preferredPdfUrl || captureData.pdfUrl;
+          emitEvent(
+            FlowState.DOWNLOAD_OR_SELECT_BILL,
+            FlowStatus.STARTED,
+            `Captured Orange PDF URL candidate (${captureData.pdfUrl}) source=${captureData?.debug?.stage || "parsed_payload"} original=${originalPdfUrl || "none"}`
+          );
+          const fetchedPdf = await fetchPdfDataUrlInTab(flowContext.orangeTabId, captureData.pdfUrl, ORANGE_PDF_CAPTURE_TIMEOUT_MS);
+          if (fetchedPdf?.ok && fetchedPdf?.dataUrl) {
+            captureData = {
+              ...captureData,
+              dataUrl: fetchedPdf.dataUrl,
+              mimeType: fetchedPdf.mimeType || captureData.mimeType || "application/pdf"
+            };
+            emitEvent(
+              FlowState.DOWNLOAD_OR_SELECT_BILL,
+              FlowStatus.STARTED,
+              "Fetched Orange PDF bytes from captured URL in page context"
+            );
+          } else {
+            const bgFetchedPdf = await fetchPdfDataUrlInBackground(captureData.pdfUrl, ORANGE_PDF_CAPTURE_TIMEOUT_MS);
+            if (bgFetchedPdf?.ok && bgFetchedPdf?.dataUrl) {
+              captureData = {
+                ...captureData,
+                dataUrl: bgFetchedPdf.dataUrl,
+                mimeType: bgFetchedPdf.mimeType || captureData.mimeType || "application/pdf"
+              };
+              emitEvent(
+                FlowState.DOWNLOAD_OR_SELECT_BILL,
+                FlowStatus.STARTED,
+                "Fetched Orange PDF bytes from captured URL in background context"
+              );
+            } else {
+              emitEvent(
+                FlowState.DOWNLOAD_OR_SELECT_BILL,
+                FlowStatus.STARTED,
+                `Captured Orange PDF URL but failed to fetch bytes (pageError=${fetchedPdf?.error || "unknown"} bgError=${bgFetchedPdf?.error || "unknown"} pageMime=${fetchedPdf?.mimeType || "none"} bgMime=${bgFetchedPdf?.mimeType || "none"} pageResponseUrl=${fetchedPdf?.responseUrl || "none"} bgResponseUrl=${bgFetchedPdf?.responseUrl || "none"} captureDebug=${JSON.stringify(captureData?.debug || {})})`
+              );
+            }
+          }
+        }
+        emitEvent(
+          FlowState.DOWNLOAD_OR_SELECT_BILL,
+          FlowStatus.STARTED,
+          captureData?.dataUrl
+            ? `Captured Orange PDF body via debugger (requestId=${captureData.requestId || "n/a"})`
+            : `Debugger capture did not return Orange PDF bytes; manual upload fallback remains available (candidates=${(captureData?.candidates || []).join(" || ") || "none"})`
+        );
+      }
+      flowContext.documentPayload = captureData?.dataUrl
+        ? {
+          ...result.document,
+          dataUrl: captureData.dataUrl,
+          mimeType: captureData.mimeType || result.document.mimeType || "application/pdf",
+          manualUploadRequired: false
+        }
+        : result.document;
       return;
     }
     case FlowState.OPEN_NAVAN:
@@ -450,9 +531,7 @@ async function runStep(state) {
         await runNavanAction("CHECK_SESSION", flowContext.navanTabId, {}, TIMEOUTS_MS.DEFAULT);
         flowContext.waitingForUser = false;
         flowContext.waitingReason = null;
-        emitEvent(FlowState.OPEN_NAVAN, FlowStatus.SUCCESS, "Navan session already active, skipping SSO checkpoint");
-        flowContext.state = FlowState.DONE;
-        emitEvent(FlowState.DONE, FlowStatus.SUCCESS, "Flow completed after opening Navan");
+        emitEvent(FlowState.OPEN_NAVAN, FlowStatus.SUCCESS, "Navan session already active, continuing to upload flow");
       } catch (_error) {
         flowContext.waitingForUser = true;
         flowContext.waitingReason = "NAVAN_SSO";
@@ -471,11 +550,21 @@ async function runStep(state) {
       return;
     case FlowState.UPLOAD_DOCUMENT:
       {
+        emitEvent(
+          FlowState.UPLOAD_DOCUMENT,
+          FlowStatus.STARTED,
+          `Preparing Navan upload payload (hasDataUrl=${Boolean(flowContext.documentPayload?.dataUrl)} mime=${flowContext.documentPayload?.mimeType || "none"} name=${flowContext.documentPayload?.name || "none"} sourceUrl=${flowContext.documentPayload?.sourceUrl || "none"})`
+        );
         const uploadResult = await runNavanAction(
           "UPLOAD_DOCUMENT",
           flowContext.navanTabId,
           { document: flowContext.documentPayload },
           UPLOAD_ACTION_TIMEOUT_MS
+        );
+        emitEvent(
+          FlowState.UPLOAD_DOCUMENT,
+          FlowStatus.STARTED,
+          `Navan upload result (uploaded=${Boolean(uploadResult?.uploaded)} manual=${Boolean(uploadResult?.manualUploadRequired)} reason=${uploadResult?.reason || "none"} file=${uploadResult?.attachedFileName || "none"} debug=${JSON.stringify(uploadResult?.debug || {})})`
         );
         if (uploadResult?.manualUploadRequired) {
           flowContext.waitingForUser = true;
@@ -554,6 +643,600 @@ async function runProviderAction(action, tabId, payload, timeoutMs) {
   }
 
   return response.data;
+}
+
+async function startOrangePdfNetworkCapture(tabId) {
+  const target = { tabId };
+  let attached = false;
+  let fetchEnabled = false;
+  let settled = false;
+  let disposed = false;
+  let fallbackCapture = null;
+  let latestPdfCandidateUrl = null;
+  const watchedRequests = new Map();
+  const processedRequestIds = new Set();
+  const recentCandidates = [];
+  let resolveCapture;
+  const capturePromise = new Promise((resolve) => {
+    resolveCapture = resolve;
+  });
+
+  const settleCapture = (value) => {
+    if (settled) return;
+    settled = true;
+    resolveCapture(value || null);
+  };
+
+  const onEvent = (source, method, params) => {
+    if (disposed) return;
+    if (source?.tabId !== tabId) return;
+    if (method === "Fetch.requestPaused") {
+      void handleFetchRequestPaused(params);
+      return;
+    }
+    if (method === "Network.responseReceived") {
+      const requestId = params?.requestId;
+      const response = params?.response;
+      if (!requestId || !isLikelyOrangeCaptureResponse(response)) return;
+      const url = String(response?.url || "");
+      const mimeType = String(response?.mimeType || "");
+      const status = Number(response?.status || 0);
+      const contentType = String(response?.headers?.["content-type"] || response?.headers?.["Content-Type"] || "");
+      const contentDisposition = String(response?.headers?.["content-disposition"] || response?.headers?.["Content-Disposition"] || "");
+      watchedRequests.set(requestId, {
+        url,
+        mimeType,
+        status,
+        contentType,
+        contentDisposition
+      });
+      if (isLikelyOrangePdfDownloadUrl(url) || /pdf/i.test(mimeType) || /pdf/i.test(contentType) || /pdf/i.test(contentDisposition)) {
+        latestPdfCandidateUrl = url;
+        if (!processedRequestIds.has(requestId)) {
+          processedRequestIds.add(requestId);
+          void attemptReadResponseBodyWithRetry(target, requestId, watchedRequests.get(requestId), 10, 150).then((capture) => {
+            if (capture?.dataUrl) {
+              settleCapture(capture);
+              return;
+            }
+            if (capture?.pdfUrl) {
+              fallbackCapture = capture;
+            }
+          });
+        }
+      }
+      recentCandidates.push(`${status || "n/a"} ${mimeType || contentType || "unknown"} ${url}`);
+      if (recentCandidates.length > 12) recentCandidates.shift();
+      return;
+    }
+    if (method === "Network.loadingFailed") {
+      watchedRequests.delete(params?.requestId);
+      return;
+    }
+    if (method !== "Network.loadingFinished") return;
+    const requestId = params?.requestId;
+    const meta = watchedRequests.get(requestId);
+    if (!requestId || !meta || settled) return;
+    if (processedRequestIds.has(requestId)) return;
+    processedRequestIds.add(requestId);
+    void readDebuggerResponseBody(target, requestId, meta).then((capture) => {
+      watchedRequests.delete(requestId);
+      if (capture?.dataUrl) {
+        settleCapture(capture);
+        return;
+      }
+      if (capture?.pdfUrl) {
+        fallbackCapture = capture;
+      }
+    });
+  };
+
+  async function handleFetchRequestPaused(params) {
+    const fetchRequestId = params?.requestId;
+    const url = String(params?.request?.url || "");
+    const responseStatusCode = Number(params?.responseStatusCode || 0);
+    const headers = headersArrayToObject(params?.responseHeaders);
+    const contentType = readHeader(headers, "content-type");
+    const contentDisposition = readHeader(headers, "content-disposition");
+
+    if (!fetchRequestId) return;
+    try {
+      if (!isLikelyOrangePdfDownloadUrl(url)) return;
+      recentCandidates.push(`${responseStatusCode || "n/a"} ${contentType || "unknown"} ${url}`);
+      if (recentCandidates.length > 12) recentCandidates.shift();
+
+      const body = await chrome.debugger.sendCommand(target, "Fetch.getResponseBody", { requestId: fetchRequestId });
+      if (!body?.body) return;
+
+      let base64 = null;
+      if (body.base64Encoded) {
+        base64 = body.body;
+      } else if (String(body.body || "").startsWith("%PDF-")) {
+        base64 = btoa(body.body);
+      }
+      if (!base64) return;
+      if (!isBase64PdfBody(base64) && !/pdf/i.test(contentType) && !/pdf/i.test(contentDisposition)) return;
+      settleCapture({
+        requestId: fetchRequestId,
+        mimeType: "application/pdf",
+        dataUrl: `data:application/pdf;base64,${base64}`
+      });
+    } catch (error) {
+      fallbackCapture = {
+        pdfUrl: url,
+        debug: {
+          stage: "fetch_domain_get_response_body_error",
+          error: String(error?.message || error || "unknown_error"),
+          contentType,
+          contentDisposition
+        }
+      };
+    } finally {
+      await continueFetchRequest(target, fetchRequestId);
+    }
+  }
+
+  const onDetach = (source) => {
+    if (source?.tabId !== tabId) return;
+    settleCapture(null);
+  };
+
+  try {
+    await chrome.debugger.attach(target, DEBUGGER_PROTOCOL_VERSION);
+    attached = true;
+    chrome.debugger.onEvent.addListener(onEvent);
+    chrome.debugger.onDetach.addListener(onDetach);
+    await chrome.debugger.sendCommand(target, "Network.enable");
+    await chrome.debugger.sendCommand(target, "Fetch.enable", {
+      patterns: [{ urlPattern: ORANGE_PDF_FETCH_URL_PATTERN, requestStage: "Response" }]
+    });
+    fetchEnabled = true;
+  } catch (error) {
+    if (attached) {
+      try {
+        await chrome.debugger.detach(target);
+      } catch (_detachError) {
+        // Ignore detach failure.
+      }
+    }
+    emitEvent(
+      FlowState.DOWNLOAD_OR_SELECT_BILL,
+      FlowStatus.STARTED,
+      `Debugger capture unavailable (${error?.message || "unknown error"})`
+    );
+    return {
+      waitForDataUrl: async () => null,
+      dispose: async () => {}
+    };
+  }
+
+  return {
+    waitForDataUrl: async (timeoutMs) => {
+      const timeoutPromise = sleep(timeoutMs).then(() => null);
+      const directCapture = await Promise.race([capturePromise, timeoutPromise]);
+      if (directCapture?.dataUrl) return directCapture;
+      if (fallbackCapture) {
+        return {
+          ...fallbackCapture,
+          candidates: recentCandidates.slice(-8)
+        };
+      }
+      if (latestPdfCandidateUrl) {
+        return {
+          pdfUrl: latestPdfCandidateUrl,
+          debug: { stage: "latest_pdf_candidate_url" },
+          candidates: recentCandidates.slice(-8)
+        };
+      }
+      return { candidates: recentCandidates.slice(-8) };
+    },
+    dispose: async () => {
+      if (disposed) return;
+      disposed = true;
+      chrome.debugger.onEvent.removeListener(onEvent);
+      chrome.debugger.onDetach.removeListener(onDetach);
+      settleCapture(null);
+      if (!attached) return;
+      try {
+        if (fetchEnabled) {
+          await chrome.debugger.sendCommand(target, "Fetch.disable");
+        }
+        await chrome.debugger.sendCommand(target, "Network.disable");
+      } catch (_error) {
+        // Ignore disable failure.
+      }
+      try {
+        await chrome.debugger.detach(target);
+      } catch (_error) {
+        // Ignore detach failure.
+      }
+    }
+  };
+}
+
+async function readDebuggerResponseBody(target, requestId, meta) {
+  const mimeType = String(meta?.mimeType || "");
+  const contentType = String(meta?.contentType || "");
+  const contentDisposition = String(meta?.contentDisposition || "");
+  const url = String(meta?.url || "");
+  const normalizedMime = mimeType || contentType;
+  const pdfLikeResponse = /pdf/i.test(normalizedMime)
+    || /pdf/i.test(contentDisposition)
+    || /\/pdf\b|\.pdf(\?|#|$)|credentialkeyforpdf=/i.test(url);
+  try {
+    const body = await chrome.debugger.sendCommand(target, "Network.getResponseBody", { requestId });
+    if (!body?.body) {
+      return pdfLikeResponse
+        ? {
+          requestId,
+          mimeType: "application/pdf",
+          pdfUrl: url,
+          debug: {
+            stage: "get_response_body_empty",
+            mimeType,
+            contentType,
+            contentDisposition
+          }
+        }
+        : null;
+    }
+    if (normalizedMime && /pdf/i.test(normalizedMime) && body.base64Encoded) {
+      const finalMime = /pdf/i.test(mimeType) ? mimeType : "application/pdf";
+      return {
+        requestId,
+        mimeType: "application/pdf",
+        dataUrl: `data:${finalMime};base64,${body.body}`
+      };
+    }
+    if (body.base64Encoded && isBase64PdfBody(body.body)) {
+      return {
+        requestId,
+        mimeType: "application/pdf",
+        dataUrl: `data:application/pdf;base64,${body.body}`
+      };
+    }
+    if (/pdf/i.test(contentDisposition) && body.base64Encoded) {
+      return {
+        requestId,
+        mimeType: "application/pdf",
+        dataUrl: `data:application/pdf;base64,${body.body}`
+      };
+    }
+
+    const textBody = body.base64Encoded ? decodeBase64Safe(body.body) : String(body.body || "");
+    if (!textBody) return null;
+
+    const pdfUrl = extractPdfUrlFromInvoicePayload(textBody, meta?.url || "");
+    if (!pdfUrl) return null;
+    return {
+      requestId,
+      mimeType: "application/pdf",
+      pdfUrl
+    };
+  } catch (error) {
+    if (!pdfLikeResponse) return null;
+    return {
+      requestId,
+      mimeType: "application/pdf",
+      pdfUrl: url,
+      debug: {
+        stage: "get_response_body_error",
+        error: String(error?.message || error || "unknown_error"),
+        mimeType,
+        contentType,
+        contentDisposition
+      }
+    };
+  }
+}
+
+async function attemptReadResponseBodyWithRetry(target, requestId, meta, attempts, waitMs) {
+  for (let i = 0; i < attempts; i += 1) {
+    const capture = await readDebuggerResponseBody(target, requestId, meta);
+    if (capture?.dataUrl || capture?.pdfUrl) return capture;
+    await sleep(waitMs);
+  }
+  return null;
+}
+
+function isLikelyOrangeCaptureResponse(response) {
+  const url = String(response?.url || "");
+  if (!url || isIgnoredCaptureUrl(url)) return false;
+  const mimeType = String(response?.mimeType || "");
+  const headerContentType = String(response?.headers?.["content-type"] || response?.headers?.["Content-Type"] || "");
+  const contentDisposition = String(response?.headers?.["content-disposition"] || response?.headers?.["Content-Disposition"] || "");
+  if (/pdf/i.test(mimeType) || /pdf/i.test(headerContentType) || /pdf/i.test(contentDisposition)) return true;
+  if (!isLikelyOrangeInvoiceUrl(url)) return false;
+  return /json|octet-stream|text/i.test(mimeType)
+    || /pdf|json/i.test(headerContentType)
+    || /\.pdf(\?|#|$)/i.test(url)
+    || /\/pdf\b/i.test(url)
+    || /billsandpaymentinfos|facture\/v\d+\.\d+/i.test(url);
+}
+
+function isIgnoredCaptureUrl(url) {
+  return /doubleclick|googletagmanager|google-analytics|tagmanager|kameleoon|_pdb\.gif/i.test(String(url || ""));
+}
+
+function isLikelyOrangeInvoiceUrl(url) {
+  let parsed = null;
+  try {
+    parsed = new URL(url);
+  } catch (_error) {
+    return false;
+  }
+  const host = String(parsed.hostname || "");
+  if (!host.includes("orange.fr") && !host.includes("orange.com")) return false;
+  const signal = `${parsed.pathname || ""} ${parsed.search || ""}`.toLowerCase();
+  return /facture|invoice|pdf|bill|ecd_wp/.test(signal);
+}
+
+function decodeBase64Safe(input) {
+  try {
+    return atob(String(input || ""));
+  } catch (_error) {
+    return "";
+  }
+}
+
+function isBase64PdfBody(base64) {
+  const sample = String(base64 || "").slice(0, 20);
+  if (!sample) return false;
+  return sample.startsWith("JVBERi0");
+}
+
+function headersArrayToObject(headers) {
+  const out = {};
+  if (!Array.isArray(headers)) return out;
+  for (const header of headers) {
+    const name = String(header?.name || "").toLowerCase().trim();
+    if (!name) continue;
+    out[name] = String(header?.value || "");
+  }
+  return out;
+}
+
+function readHeader(headers, name) {
+  return String(headers?.[String(name || "").toLowerCase()] || "");
+}
+
+async function continueFetchRequest(target, requestId) {
+  if (!requestId) return;
+  try {
+    await chrome.debugger.sendCommand(target, "Fetch.continueRequest", { requestId });
+  } catch (_error) {
+    // Ignore; request may already be continued or target detached.
+  }
+}
+
+function extractPdfUrlFromInvoicePayload(textBody, baseUrl) {
+  const fromJson = extractPdfUrlFromJsonText(textBody, baseUrl);
+  if (fromJson) return fromJson;
+
+  const directUrlMatch = textBody.match(/https?:\/\/[^\s"'<>]+/gi) || [];
+  for (const raw of directUrlMatch) {
+    const normalized = normalizePdfCandidateUrl(raw, baseUrl);
+    if (normalized) return normalized;
+  }
+  return null;
+}
+
+function extractPdfUrlFromJsonText(textBody, baseUrl) {
+  let parsed = null;
+  try {
+    parsed = JSON.parse(textBody);
+  } catch (_error) {
+    return null;
+  }
+  return findPdfUrlInObject(parsed, baseUrl);
+}
+
+function findPdfUrlInObject(node, baseUrl) {
+  if (!node) return null;
+  if (typeof node === "string") {
+    return normalizePdfCandidateUrl(node, baseUrl);
+  }
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      const hit = findPdfUrlInObject(item, baseUrl);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  if (typeof node === "object") {
+    for (const value of Object.values(node)) {
+      const hit = findPdfUrlInObject(value, baseUrl);
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
+function normalizePdfCandidateUrl(candidate, baseUrl) {
+  const raw = String(candidate || "").trim();
+  if (!raw) return null;
+  if (!/(pdf|facture|invoice|bill|download|ecd_wp)/i.test(raw)) return null;
+  try {
+    const parsed = new URL(raw, baseUrl || undefined);
+    const normalized = parsed.toString();
+    if (!isLikelyOrangeInvoiceUrl(normalized)) return null;
+    if (!isLikelyOrangePdfDownloadUrl(normalized)) return null;
+    return normalized;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function isLikelyOrangePdfDownloadUrl(url) {
+  let parsed = null;
+  try {
+    parsed = new URL(url);
+  } catch (_error) {
+    return false;
+  }
+  const signal = `${parsed.pathname || ""} ${parsed.search || ""}`.toLowerCase();
+  if (/\.pdf(\?|#|$)/i.test(url)) return true;
+  if (/\/billsandpaymentinfos\//i.test(signal)) return false;
+  if (/credentialkeyforpdf=|billdate=|\/ecd_wp\/facture\//i.test(signal)) return true;
+  if (/\/v\d+\.\d+\/pdf\b/i.test(signal)) return true;
+  return false;
+}
+
+function selectPreferredOrangePdfUrl(captureData) {
+  const direct = String(captureData?.pdfUrl || "");
+  const candidates = Array.isArray(captureData?.candidates) ? captureData.candidates : [];
+
+  const fromCandidates = candidates
+    .map((entry) => String(entry || ""))
+    .map((entry) => {
+      const match = entry.match(/\bhttps?:\/\/\S+$/i);
+      if (!match?.[0]) return null;
+      const url = match[0];
+      const isPdfMime = /\bapplication\/pdf\b/i.test(entry);
+      return { url, isPdfMime };
+    })
+    .filter(Boolean)
+    .filter((item) => isLikelyOrangePdfDownloadUrl(item.url))
+    .sort((a, b) => Number(b.isPdfMime) - Number(a.isPdfMime));
+
+  if (fromCandidates.length) return fromCandidates[0].url;
+  return isLikelyOrangePdfDownloadUrl(direct) ? direct : null;
+}
+
+async function fetchPdfDataUrlInTab(tabId, url, timeoutMs = TIMEOUTS_MS.LONG) {
+  const result = await withTimeout(
+    chrome.scripting.executeScript({
+      target: { tabId },
+      world: "MAIN",
+      args: [url],
+      func: async (targetUrl) => {
+        try {
+          const response = await fetch(targetUrl, {
+            credentials: "include",
+            cache: "no-store"
+          });
+          if (!response.ok) {
+            return { ok: false, error: `fetch_failed_${response.status}` };
+          }
+          const blob = await response.blob();
+          const isPdfMime = /pdf/i.test(String(blob.type || ""));
+          const bytes = new Uint8Array(await blob.arrayBuffer());
+          const hasPdfMagic = bytes.length >= 4
+            && bytes[0] === 0x25
+            && bytes[1] === 0x50
+            && bytes[2] === 0x44
+            && bytes[3] === 0x46;
+          if (!isPdfMime && !hasPdfMagic) {
+            return {
+              ok: false,
+              error: "not_pdf_response",
+              mimeType: String(blob.type || ""),
+              responseUrl: String(response.url || targetUrl || "")
+            };
+          }
+          const dataUrl = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result || ""));
+            reader.onerror = () => reject(new Error("file_reader_error"));
+            reader.readAsDataURL(blob);
+          });
+          return {
+            ok: true,
+            dataUrl,
+            mimeType: "application/pdf"
+          };
+        } catch (error) {
+          return { ok: false, error: String(error?.message || error || "fetch_error") };
+        }
+      }
+    }),
+    timeoutMs,
+    "Timed out while fetching Orange PDF in page context"
+  );
+
+  const payload = result?.[0]?.result;
+  if (!payload?.ok || !payload?.dataUrl) return payload || { ok: false, error: "missing_payload" };
+  if (!String(payload.dataUrl).startsWith("data:")) {
+    return { ok: false, error: "invalid_data_url_prefix", mimeType: String(payload?.mimeType || "") };
+  }
+  return {
+    ok: true,
+    dataUrl: payload.dataUrl,
+    mimeType: payload.mimeType || "application/pdf",
+    responseUrl: payload.responseUrl || ""
+  };
+}
+
+async function fetchPdfDataUrlInBackground(url, timeoutMs = TIMEOUTS_MS.LONG) {
+  try {
+    const response = await withTimeout(
+      fetch(url, {
+        method: "GET",
+        credentials: "include",
+        cache: "no-store",
+        headers: {
+          Accept: "application/pdf,application/octet-stream,*/*"
+        }
+      }),
+      timeoutMs,
+      "Timed out while fetching Orange PDF in background context"
+    );
+    if (!response.ok) {
+      return { ok: false, error: `fetch_failed_${response.status}`, responseUrl: String(response.url || url || "") };
+    }
+    const blob = await response.blob();
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    const isPdfMime = /pdf/i.test(String(blob.type || ""));
+    const hasPdfMagic = bytes.length >= 4
+      && bytes[0] === 0x25
+      && bytes[1] === 0x50
+      && bytes[2] === 0x44
+      && bytes[3] === 0x46;
+    if (!isPdfMime && !hasPdfMagic) {
+      return {
+        ok: false,
+        error: "not_pdf_response",
+        mimeType: String(blob.type || ""),
+        responseUrl: String(response.url || url || "")
+      };
+    }
+    const base64 = bytesToBase64(bytes);
+    return {
+      ok: true,
+      dataUrl: `data:application/pdf;base64,${base64}`,
+      mimeType: "application/pdf",
+      responseUrl: String(response.url || url || "")
+    };
+  } catch (error) {
+    return { ok: false, error: String(error?.message || error || "fetch_error"), responseUrl: String(url || "") };
+  }
+}
+
+function bytesToBase64(bytes) {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, i + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return btoa(binary);
+}
+
+function withTimeout(promise, timeoutMs, message) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new FlowError(ErrorCode.ACTION_TIMEOUT, message));
+    }, timeoutMs);
+    Promise.resolve(promise)
+      .then((value) => {
+        clearTimeout(timer);
+        resolve(value);
+      })
+      .catch((error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+  });
 }
 
 async function runNavanAction(action, tabId, payload, timeoutMs) {

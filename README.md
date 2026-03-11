@@ -9,6 +9,20 @@ This will help us track the number of downloads.
 Video demo: 
 https://youtu.be/dusQxY_aq6s
 
+1. Open the extension
+2. Choose your provider and billing type, then click **Start Flow**.
+3. On provider login, enter your username/password directly on the provider website.
+4. The flow resumes automatically after provider login is detected. If needed, click **Resume**.
+
+### How to handle exception
+1. If the provider shows a captcha, solve it in the webpage then come back to click **Resume**.
+2. Complete Google SSO in Navan when prompted, then click **Resume**.
+
+## Technical flow 
+Private unpacked Chrome extension that:
+1. asks provider + br 15 minutes inactivity.
+- User manually performs final submit in Navan.
+- Orange PDF byte capture uses Chrome DevTools Protocol (`debugger` permission).
 
 ## Note
 [Product story – the why?](https://github.com/EvHanHan/quick-refund/wiki/Product-story-%E2%80%90-the-why%3F)

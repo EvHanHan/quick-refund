@@ -123,27 +123,122 @@ async function autofillTransaction(draft) {
 
 async function uploadDocument(documentPayload) {
   const navanHints = documentPayload?.navanHints || {};
-  await wait(15_000);
+  const attached = await attachDocumentToFileInput(documentPayload, 25_000);
+  if (!attached.ok) {
+    return {
+      uploaded: false,
+      manualUploadRequired: true,
+      reason: attached.reason || "file_attach_failed",
+      debug: attached.debug || {}
+    };
+  }
+
+  await wait(5_000);
   const created = await waitAndClickCreateSingleTransaction(5_000);
   if (!created) {
     return {
       uploaded: false,
       manualUploadRequired: true,
-      reason: "create_single_transaction_not_found"
+      reason: "create_single_transaction_not_found",
+      debug: attached.debug || {}
     };
   }
 
-  await waitForDescriptionPrefill(25_000);
-  setDescriptionFixed("monthly invoice");
+  const descriptionPrefilled = await waitForDescriptionPrefill(25_000);
+  if (descriptionPrefilled) {
+    setDescriptionFixed("monthly invoice");
+  }
 
   const hintsApplied = await applyNavanHints(navanHints);
   const expenseTypeSelected = await finalizeExpenseTypeSelection(navanHints.expenseType);
   return {
     uploaded: true,
+    attachedFileName: attached.fileName,
     createSingleTransactionClicked: created,
     expenseTypeSelected,
-    hintsApplied
+    hintsApplied,
+    debug: {
+      ...(attached.debug || {}),
+      descriptionPrefilled
+    }
   };
+}
+
+async function attachDocumentToFileInput(documentPayload, timeoutMs) {
+  const dataUrl = String(documentPayload?.dataUrl || "");
+  if (!dataUrl.startsWith("data:")) {
+    return { ok: false, reason: "missing_data_url", debug: { dataUrlPrefix: dataUrl.slice(0, 24) } };
+  }
+
+  const fileInput = await waitForNavanFileInput(timeoutMs);
+  if (!fileInput) {
+    return { ok: false, reason: "file_input_not_found", debug: {} };
+  }
+
+  const fileName = String(documentPayload?.name || "invoice.pdf");
+  const mimeType = String(documentPayload?.mimeType || "application/pdf");
+  const file = dataUrlToFile(dataUrl, fileName, mimeType);
+  if (!file) {
+    return { ok: false, reason: "invalid_data_url", debug: { fileName, mimeType } };
+  }
+
+  const transfer = new DataTransfer();
+  transfer.items.add(file);
+  fileInput.files = transfer.files;
+  fileInput.dispatchEvent(new Event("input", { bubbles: true }));
+  fileInput.dispatchEvent(new Event("change", { bubbles: true }));
+  const assignedCount = Number(fileInput.files?.length || 0);
+  const assignedName = assignedCount > 0 ? String(fileInput.files[0]?.name || "") : "";
+  const assignedType = assignedCount > 0 ? String(fileInput.files[0]?.type || "") : "";
+  const assignedSize = assignedCount > 0 ? Number(fileInput.files[0]?.size || 0) : 0;
+  const debug = {
+    inputId: String(fileInput.id || ""),
+    inputName: String(fileInput.name || ""),
+    inputAccept: String(fileInput.accept || ""),
+    assignedCount,
+    assignedName,
+    assignedType,
+    assignedSize
+  };
+  if (assignedCount === 0) {
+    return { ok: false, reason: "file_input_assignment_failed", debug };
+  }
+  return { ok: true, fileName, debug };
+}
+
+async function waitForNavanFileInput(timeoutMs) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const fromSelectors = queryAny(window.__EXT_SELECTORS__.navan.transactionForm.file, { allowHidden: true });
+    const generic = querySelectorDeep("input[type='file']");
+    const input = (fromSelectors || generic);
+    if (input instanceof HTMLInputElement && input.type === "file") {
+      return input;
+    }
+    await wait(250);
+  }
+  return null;
+}
+
+function dataUrlToFile(dataUrl, fileName, fallbackMimeType) {
+  const parts = String(dataUrl || "").split(",", 2);
+  if (parts.length !== 2) return null;
+
+  const header = parts[0];
+  const base64 = parts[1];
+  const mimeMatch = header.match(/^data:([^;]+);base64$/i);
+  const mimeType = mimeMatch?.[1] || fallbackMimeType || "application/pdf";
+
+  try {
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return new File([bytes], fileName, { type: mimeType });
+  } catch (_error) {
+    return null;
+  }
 }
 
 async function waitForDescriptionPrefill(timeoutMs) {

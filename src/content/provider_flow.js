@@ -37,245 +37,101 @@ async function handleProviderAction(action, payload) {
   }
 }
 
+function getProviderStrategy(provider) {
+  const strategy = window.__EXT_PROVIDER_STRATEGIES__?.get(provider);
+  if (!strategy) {
+    throw new Error(`No provider strategy registered for ${provider}`);
+  }
+  return strategy;
+}
+
+function createProviderContext(provider) {
+  return {
+    provider,
+    document,
+    location,
+    performance,
+    selectors: window.__EXT_SELECTORS__,
+    getProviderLoginSelectors,
+    getProviderBillingSelectors,
+    normalizeText,
+    normalizeComparableText,
+    normalizeUrl,
+    parseFilenameFromContentDisposition,
+    getCurrentMonthStartISO,
+    queryWithin,
+    firstNonEmptyQuery,
+    firstNonEmptyQueryWithin,
+    pick,
+    wait,
+    waitForVisible,
+    findByText,
+    findByLooseText,
+    findClickableByText,
+    findClickableByLooseText,
+    realClick,
+    isVisible,
+    resolveDownloadUrl,
+    waitForDownloadUrl,
+    waitForNavigoDownloadUrl,
+    forceDownloadFromUrl
+  };
+}
+
 function checkProviderSession(provider) {
-  if (provider === "free_mobile_provider") {
-    const diagnostics = getFreeMobileAuthDiagnostics();
-    return {
-      authenticated: isProviderAuthenticated(provider),
-      diagnostics
-    };
+  const strategy = getProviderStrategy(provider);
+  const ctx = createProviderContext(provider);
+  if (typeof strategy.checkProviderSession === "function") {
+    return strategy.checkProviderSession(ctx);
   }
   return {
-    authenticated: isProviderAuthenticated(provider)
+    authenticated: Boolean(strategy.isAuthenticated?.(ctx))
   };
 }
 
 function checkProviderBillingReady(provider) {
-  const text = normalizeText(document.body?.textContent || "");
-  if (provider === "redbysfr_provider") {
-    const factureHeading = findByText("vos factures") || findByText("facture fixe");
-    return {
-      ready: Boolean(factureHeading) || text.includes("vos factures") || text.includes("facture fixe") || isProviderAuthenticated(provider)
-    };
-  }
-  if (provider === "sosh_provider") {
-    const href = String(location.href || "");
-    const onDetailPage = /\/facture-paiement\/\d+\/detail-facture/.test(href);
-    if (onDetailPage) {
-      return { ready: true };
-    }
-    const billing = getProviderBillingSelectors(provider);
-    const downloadButton = queryWithin(document, billing.downloadButton);
-    return { ready: Boolean(downloadButton) || isProviderAuthenticated(provider) };
-  }
-  if (provider === "free_mobile_provider") {
-    const diagnostics = getFreeMobileAuthDiagnostics();
-    return {
-      ready: isProviderAuthenticated(provider),
-      diagnostics
-    };
-  }
-  if (provider === "navigo_provider") {
-    return {
-      ready: isProviderAuthenticated(provider)
-        && (findByLooseText("mon navigo") || findByLooseText("mes services") || findByLooseText("bienvenue"))
-    };
-  }
-
-  return {
-    ready: isProviderAuthenticated(provider)
-  };
+  const strategy = getProviderStrategy(provider);
+  return strategy.checkBillingReady(createProviderContext(provider));
 }
 
 async function authProvider(provider, _payload) {
-  if (isProviderAuthenticated(provider)) {
-    return { authenticated: true, skippedLogin: true, captchaRequired: false };
-  }
-
-  if (provider === "free_mobile_provider") {
-    if (isFreeMobileOtpRequired()) {
-      return { authenticated: false, manualLoginRequired: true, smsCodeRequired: true };
-    }
-  }
-
-  return { authenticated: false, manualLoginRequired: true, captchaRequired: false };
+  const strategy = getProviderStrategy(provider);
+  return strategy.auth(createProviderContext(provider), _payload);
 }
 
 async function navigateBilling(provider, payload) {
-  if (provider === "orange_provider" || provider === "sosh_provider") {
-    const accountType = payload?.AccountType === "mobile_internet" ? "mobile_internet" : "home_internet";
-    const href = String(location.href || "");
-    const onSelectionPage = href.startsWith("https://espace-client.orange.fr/selectionner-un-contrat");
-    const accountIdFromUrl = extractAccountId(null, href);
-    const onBillingPage = /\/facture-paiement\/\d+/.test(href);
-    if (!onSelectionPage && !onBillingPage) {
-      throw new Error("Orange/Sosh is not on contract selection or billing page");
-    }
-
-    let accountId = accountIdFromUrl;
-    if (!accountId) {
-      const accountWaitMs = provider === "sosh_provider" ? 1000 : 15000;
-      let selectedAccountLink = await waitForAccountItem(accountType, accountWaitMs);
-      if (!selectedAccountLink && provider === "sosh_provider") {
-        selectedAccountLink = await waitForAnyAccountItem(1000);
-      }
-      if (!selectedAccountLink) {
-        throw new Error(`Could not find Orange account card for type: ${accountType}`);
-      }
-      const accountHref = normalizeUrl(selectedAccountLink.getAttribute("href"));
-      accountId = extractAccountId(selectedAccountLink, accountHref);
-      if (!accountId) {
-        throw new Error("Could not extract Orange account id from selected card");
-      }
-    }
-
-    const detailUrl = /\/detail-facture/.test(href)
-      ? href
-      : `https://espace-client.orange.fr/facture-paiement/${accountId}/detail-facture`;
-    return { navigated: true, accountId, detailUrl };
-  }
-
-  if (provider === "redbysfr_provider") {
-    return { navigated: true, detailUrl: location.href };
-  }
-
-  if (provider === "free_provider") {
-    // Free ADSL session is carried in URL query params (id/idt). Stay on the current session page.
-    // We only verify that at least one invoice PDF link is visible.
-    const billing = getProviderBillingSelectors(provider);
-    const invoices = firstNonEmptyQuery(billing.invoiceLinks || []);
-    if (!invoices.length) {
-      throw new Error("Could not find Free invoice link (facture_pdf.pl)");
-    }
-    return { navigated: true, detailUrl: location.href };
-  }
-
-  if (provider === "free_mobile_provider") {
-    if (!location.hostname.includes("mobile.free.fr")) {
-      throw new Error("Free Mobile tab is not on mobile.free.fr");
-    }
-    if (!isProviderAuthenticated(provider)) {
-      throw new Error("Free Mobile user is not authenticated");
-    }
-
-    const inAccountArea = /^\/account\/v2(?:\/|$)/.test(location.pathname);
-    if (inAccountArea) {
-      return { navigated: true, detailUrl: location.href };
-    }
-    return { navigated: true, detailUrl: "https://mobile.free.fr/account/v2" };
-  }
-
-  if (provider === "navigo_provider") {
-    if (!isProviderAuthenticated(provider)) {
-      throw new Error("Navigo user is not authenticated");
-    }
-    await waitForNavigoRoutingHints(4000);
-    const accountType = String(payload?.AccountType || "").trim();
-
-    if (accountType === "monthly") {
-      const monthly = await navigateNavigoMonthlyPath(20_000);
-      if (!monthly?.navigated) {
-        throw new Error(
-          `Could not open Navigo monthly attestation flow (${monthly?.reason || "unknown"}) | ${summarizeNavigoPageDiagnostics()}`
-        );
-      }
-      return { navigated: true, detailUrl: monthly.detailUrl || location.href };
-    }
-
-    const prelevementsUrl = resolveNavigoPrelevementsUrl();
-    if (prelevementsUrl) {
-      return { navigated: true, detailUrl: prelevementsUrl };
-    }
-
-    const directBillingUrl = resolveNavigoBillingEntryUrl();
-    if (directBillingUrl) {
-      return { navigated: true, detailUrl: directBillingUrl };
-    }
-    const navigoTab = await clickNavigoBillingPath(8000);
-    if (!navigoTab) {
-      throw new Error(`Could not open Navigo billing section | ${summarizeNavigoPageDiagnostics()}`);
-    }
-    return { navigated: true, detailUrl: location.href };
-  }
-
-  // Generic provider path: navigate to a discoverable invoice page/link.
-  const generic = window.__EXT_SELECTORS__.providerDefaults.billing.invoiceLinks;
-  const invoiceEntry = await waitForVisible(generic, 8000);
-  if (invoiceEntry) {
-    const href = normalizeUrl(invoiceEntry.getAttribute("href"));
-    if (href) {
-      return { navigated: true, detailUrl: href };
-    }
-    realClick(invoiceEntry);
-  }
-  return { navigated: true, detailUrl: location.href };
-}
-
-async function waitForNavigoRoutingHints(timeoutMs) {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    const hasDetailLink = Boolean(document.querySelector("a[href*='/espace_client/detail/']"));
-    const hasMonNavigo = Boolean(findNavigoAnchorByText("mon navigo"));
-    const onDetailPage = /\/espace_client\/detail\/[^/?#]+/i.test(String(location.pathname || ""));
-    const onPrelevementPage = /\/prelevements\/[^/?#]+/i.test(String(location.pathname || ""));
-    const onAttestationPage = /\/attestation\/[^/?#]+/i.test(String(location.pathname || ""));
-    if (hasDetailLink || hasMonNavigo || onDetailPage || onPrelevementPage || onAttestationPage) return;
-    await wait(150);
-  }
+  const strategy = getProviderStrategy(provider);
+  return strategy.navigateBilling(createProviderContext(provider), payload);
 }
 
 async function downloadAndExtractBill(provider) {
+  const strategy = getProviderStrategy(provider);
+  const ctx = createProviderContext(provider);
   const startedAt = Date.now();
-  if (provider === "sosh_provider") {
-    const href = String(location.href || "");
-    if (!/\/facture-paiement\/\d+\/detail-facture/.test(href)) {
-      throw new Error("Sosh is not on invoice detail page");
-    }
-  }
   const providerSelectors = getProviderBillingSelectors(provider);
   const billing = providerSelectors || window.__EXT_SELECTORS__.providerDefaults.billing;
   const beforeResources = new Set(performance.getEntriesByType("resource").map((entry) => entry.name));
-    const isNavigo = provider === "navigo_provider";
-    const isSosh = provider === "sosh_provider";
-    const isOrange = provider === "orange_provider";
-    const downloadWaitMs = isSosh ? 1000 : 12000;
-    const downloadUrlWaitMs = (isSosh || isOrange) ? 1000 : 8000;
-    const downloadControlStart = Date.now();
-    const downloadControl = provider === "free_provider"
-    ? await findBestFreeInvoiceControl(billing.downloadButton, 12000)
-    : provider === "free_mobile_provider"
-      ? await findBestFreeMobileInvoiceControl(billing, 12000)
-    : isNavigo
-      ? await findBestNavigoInvoiceControl(billing, 20000)
-    : await waitForVisible(billing.downloadButton, downloadWaitMs);
+  const plan = await strategy.getDownloadPlan(ctx, { billing, beforeResources, startedAt });
+  const downloadControl = plan?.downloadControl;
   if (!downloadControl) {
     throw new Error("Could not find provider PDF download button");
   }
-  const downloadControlMs = Date.now() - downloadControlStart;
 
-  let didClickControl = false;
-  let href = isNavigo ? null : resolveDownloadUrl(downloadControl, beforeResources, provider);
-  if (!href || isNavigo) {
-    realClick(downloadControl);
-    didClickControl = true;
-    // Do not wait for physical download completion. Continue flow immediately.
-    const downloadUrlStart = Date.now();
-    href = isNavigo
-      ? await waitForNavigoDownloadUrl(beforeResources, 8000)
-      : await waitForDownloadUrl(downloadControl, beforeResources, provider, downloadUrlWaitMs);
-    var downloadUrlMs = Date.now() - downloadUrlStart;
-  }
+  const didClickControl = Boolean(plan?.didClickControl);
+  const href = plan?.href || null;
+  const downloadControlMs = plan?.downloadControlMs ?? null;
+  const downloadUrlMs = plan?.downloadUrlMs ?? null;
   const totalMs = Date.now() - startedAt;
 
   const fileName = deriveFileName(provider, href || location.href, "application/pdf", "");
 
-  // Free invoice links usually open PDF in a new tab; force a real download in the current page context.
-  if (provider === "free_provider" && href) {
+  if (strategy.shouldForceDownload?.(ctx, { href, fileName })) {
     await forceDownloadFromUrl(href, fileName);
   } else if (!didClickControl) {
     realClick(downloadControl);
   }
   const billText = document.body.textContent || "";
+  const navanHints = strategy.buildNavanHints?.(ctx, { href, fileName }) || undefined;
 
   return {
     billText,
@@ -286,12 +142,7 @@ async function downloadAndExtractBill(provider) {
       dataUrl: null,
       sourceUrl: href,
       manualUploadRequired: true,
-      navanHints: isNavigo
-        ? {
-          expenseType: "commuter benefits",
-          transactionDateISO: getCurrentMonthStartISO()
-        }
-        : undefined
+      navanHints
     },
     diagnostics: {
       downloadControlMs,
@@ -327,135 +178,13 @@ async function forceDownloadFromUrl(url, fileName) {
   }
 }
 
-async function findBestFreeInvoiceControl(selectors, timeoutMs) {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    const links = firstNonEmptyQuery(selectors || []);
-    if (links.length) {
-      const preferred = pickBestFreeInvoiceByMonth(links);
-      if (preferred) return preferred;
-      return links[0];
-    }
-    await wait(200);
-  }
-  return null;
-}
-
-function pickBestFreeInvoiceByMonth(links) {
-  const current = new Date();
-  const currentKey = `${current.getFullYear()}${String(current.getMonth() + 1).padStart(2, "0")}`;
-
-  const scored = links.map((el) => {
-    const href = String(el.getAttribute("href") || "");
-    const title = String(el.getAttribute("title") || "");
-    const text = `${title} ${el.textContent || ""}`;
-    const monthKey = extractMonthKeyFromFreeInvoice(href, text);
-    return { el, monthKey };
-  });
-
-  const sameMonth = scored.find((item) => item.monthKey === currentKey);
-  if (sameMonth) return sameMonth.el;
-
-  const withMonth = scored
-    .filter((item) => /^\d{6}$/.test(item.monthKey))
-    .sort((a, b) => Number(b.monthKey) - Number(a.monthKey));
-  if (withMonth.length) return withMonth[0].el;
-
-  return scored[0]?.el || null;
-}
-
-function extractMonthKeyFromFreeInvoice(href, text) {
-  const monthInHref = String(href || "").match(/[?&]mois=(\d{6})\b/i);
-  if (monthInHref?.[1]) return monthInHref[1];
-
-  const normalized = normalizeText(text || "");
-  const frMatch = normalized.match(/\b(janvier|fevrier|février|mars|avril|mai|juin|juillet|aout|août|septembre|octobre|novembre|decembre|décembre)\s+(20\d{2})\b/i);
-  if (!frMatch) return null;
-
-  const month = frenchMonthToNumber(frMatch[1]);
-  if (!month) return null;
-  return `${frMatch[2]}${month}`;
-}
-
 function deriveFileName(provider, url, contentType, contentDisposition) {
-  const accountId = extractAccountIdFromLocation();
-  const billDateISO = extractBillDateISO();
-  if (provider === "orange_provider" && accountId && billDateISO) {
-    return `facture_${accountId}_${billDateISO}.pdf`;
-  }
-
-  if (provider === "free_provider") {
-    const freeName = deriveFreePdfFileName(url);
-    if (freeName) return freeName;
-  }
-  if (provider === "free_mobile_provider") {
-    const freeMobileName = deriveFreeMobilePdfFileName(url);
-    if (freeMobileName) return freeMobileName;
-  }
-  if (provider === "navigo_provider") {
-    const navigoName = deriveNavigoPdfFileName(url);
-    if (navigoName) return navigoName;
-  }
-
-  const fromDisposition = parseFilenameFromContentDisposition(contentDisposition);
-  if (fromDisposition) return fromDisposition;
-
-  const fromUrl = url.split("?")[0].split("/").pop();
-  if (fromUrl && fromUrl.includes(".")) return fromUrl;
-
-  if (String(contentType || "").includes("html")) return "orange-bill.html";
-  return "orange-bill.pdf";
-}
-
-function deriveFreePdfFileName(url) {
-  let parsed = null;
-  try {
-    parsed = new URL(url, location.href);
-  } catch (_error) {
-    return null;
-  }
-
-  const path = parsed.pathname || "";
-  const isFreeInvoiceEndpoint = /facture_pdf\.pl$/i.test(path) || parsed.searchParams.has("no_facture");
-  if (!isFreeInvoiceEndpoint) return null;
-
-  const noFacture = (parsed.searchParams.get("no_facture") || "").trim();
-  const mois = (parsed.searchParams.get("mois") || "").trim();
-  if (noFacture && /^\d{6}$/.test(mois)) {
-    return `facture_${noFacture}_${mois}.pdf`;
-  }
-  if (noFacture) return `facture_${noFacture}.pdf`;
-  if (/^\d{6}$/.test(mois)) return `facture_${mois}.pdf`;
-  return "facture_free.pdf";
-}
-
-function deriveFreeMobilePdfFileName(url) {
-  let parsed = null;
-  try {
-    parsed = new URL(url, location.href);
-  } catch (_error) {
-    return null;
-  }
-
-  const invoiceId = (parsed.pathname || "").match(/\/api\/SI\/invoice\/(\d+)\b/i)?.[1];
-  if (!invoiceId) return null;
-  return `facture_free_mobile_${invoiceId}.pdf`;
-}
-
-function deriveNavigoPdfFileName(url) {
-  let parsed = null;
-  try {
-    parsed = new URL(url, location.href);
-  } catch (_error) {
-    return null;
-  }
-
-  const rawId = parsed.searchParams.get("id") || parsed.searchParams.get("documentId");
-  const documentId = String(rawId || "").trim();
-  if (documentId) return `attestation_navigo_${documentId}.pdf`;
-  return /attestation|prelev/i.test(parsed.pathname || "")
-    ? `attestation_navigo_${getCurrentMonthStartISO().slice(0, 7)}.pdf`
-    : null;
+  const strategy = getProviderStrategy(provider);
+  return strategy.deriveFileName(createProviderContext(provider), {
+    url,
+    contentType,
+    contentDisposition
+  });
 }
 
 async function findBestFreeMobileInvoiceControl(billingSelectors, timeoutMs) {
@@ -549,68 +278,10 @@ function findByLooseText(text) {
   return candidates.find((node) => normalizeComparableText(node.textContent || "").includes(target)) || null;
 }
 
-function resolveNavigoBillingEntryUrl() {
-  const monNavigoAnchor = findNavigoAnchorByText("mon navigo");
-  const monNavigoHref = normalizeUrl(monNavigoAnchor?.getAttribute("href"));
-  if (monNavigoHref) return monNavigoHref;
-
-  return null;
-}
-
-function resolveNavigoPrelevementsUrl() {
-  const currentPath = String(location.pathname || "");
-  const onPrelevements = currentPath.match(/\/prelevements\/([^/?#]+)/i);
-  if (onPrelevements?.[1]) {
-    return location.href;
-  }
-
-  const onDetail = currentPath.match(/\/espace_client\/detail\/([^/?#]+)/i);
-  if (onDetail?.[1]) {
-    return `https://www.jegeremacartenavigo.iledefrance-mobilites.fr/prelevements/${onDetail[1]}`;
-  }
-
-  const annualContractId = findNavigoAnnualContractIdFromList();
-  if (annualContractId) {
-    return `https://www.jegeremacartenavigo.iledefrance-mobilites.fr/prelevements/${annualContractId}`;
-  }
-
-  return null;
-}
-
-function findNavigoAnchorByText(text) {
-  const target = normalizeComparableText(text);
-  const anchors = Array.from(document.querySelectorAll("a[href]"));
-  const best = anchors.find((a) => normalizeComparableText(a.textContent || "").includes(target));
-  if (best) return best;
-  return null;
-}
-
 function findClickableByLooseText(text) {
   const target = normalizeComparableText(text);
   const nodes = Array.from(document.querySelectorAll("button,a,[role='button'],[role='tab'],option,li,span,div"));
   return nodes.find((node) => normalizeComparableText(node.textContent || "").includes(target) && isVisible(node)) || null;
-}
-
-function isNavigoEspaceClientRoot() {
-  return /^\/espace_client\/?$/i.test(String(location.pathname || ""));
-}
-
-function isNavigoMonEspaceHome() {
-  const host = String(location.hostname || "").toLowerCase();
-  return host.includes("mon-espace.iledefrance-mobilites.fr");
-}
-
-function isNavigoDetailPage() {
-  return /\/espace_client\/detail\/[^/?#]+/i.test(String(location.pathname || ""));
-}
-
-function isNavigoAttestationPage() {
-  return /\/attestation\/[^/?#]+/i.test(String(location.pathname || ""));
-}
-
-function extractNavigoContractIdFromPath(pathname = location.pathname) {
-  const match = String(pathname || "").match(/\/(?:espace_client\/detail|attestation)\/([^/?#]+)/i);
-  return match?.[1] || null;
 }
 
 async function waitForNavigoPathMatch(pattern, timeoutMs) {
@@ -635,279 +306,6 @@ async function clickNavigoSelector(selector, timeoutMs) {
   return false;
 }
 
-async function navigateNavigoMonthlyPath(timeoutMs) {
-  const start = Date.now();
-
-  while (Date.now() - start < timeoutMs) {
-    if (isNavigoMonEspaceHome()) {
-      const monNavigoHref = resolveNavigoBillingEntryUrl();
-      if (monNavigoHref) {
-        return {
-          navigated: true,
-          detailUrl: monNavigoHref,
-          contractId: extractNavigoContractIdFromPath(new URL(monNavigoHref).pathname)
-        };
-      }
-    }
-
-    if (isNavigoAttestationPage()) {
-      return {
-        navigated: true,
-        detailUrl: location.href,
-        contractId: extractNavigoContractIdFromPath()
-      };
-    }
-
-    if (isNavigoDetailPage()) {
-      const attestationLink = normalizeUrl(pick(["#compte-user-detail-contrat-nav-2"])?.getAttribute("href"));
-      if (attestationLink) {
-        return {
-          navigated: true,
-          detailUrl: attestationLink,
-          contractId: extractNavigoContractIdFromPath(new URL(attestationLink).pathname)
-        };
-      }
-      const contractId = extractNavigoContractIdFromPath();
-      if (contractId) {
-        return {
-          navigated: true,
-          detailUrl: `https://www.jegeremacartenavigo.iledefrance-mobilites.fr/attestation/${contractId}`,
-          contractId
-        };
-      }
-      await wait(250);
-      continue;
-    }
-
-    if (isNavigoEspaceClientRoot()) {
-      const detailLink = normalizeUrl(
-        pick(["#compte-user-mon-espace-a-loop-1"])?.getAttribute("href")
-          || pick(["a[href*='/espace_client/detail/']"])?.getAttribute("href")
-      );
-      if (detailLink) {
-        return {
-          navigated: true,
-          detailUrl: detailLink,
-          contractId: extractNavigoContractIdFromPath(new URL(detailLink).pathname)
-        };
-      }
-      await wait(250);
-      continue;
-    }
-
-    const fallbackDetailLink = normalizeUrl(pick(["a[href*='/espace_client/detail/']"])?.getAttribute("href"));
-    if (fallbackDetailLink) {
-      return {
-        navigated: true,
-        detailUrl: fallbackDetailLink,
-        contractId: extractNavigoContractIdFromPath(new URL(fallbackDetailLink).pathname)
-      };
-    }
-
-    await wait(250);
-  }
-
-  return {
-    navigated: false,
-    reason: `timeout path=${location.pathname} hasRootButton=${Boolean(document.querySelector("#compte-user-mon-espace-a-loop-1"))} hasDetailButton=${Boolean(document.querySelector("#compte-user-detail-contrat-nav-2"))} hasDownloadButton=${Boolean(document.querySelector("#actes-payment-attestation-txt-5"))}`
-  };
-}
-
-async function clickNavigoBillingPath(timeoutMs) {
-  const start = Date.now();
-
-  while (Date.now() - start < timeoutMs) {
-    const monNavigo = findClickableByLooseText("mon navigo");
-    if (monNavigo) {
-      realClick(monNavigo);
-      await wait(800);
-    }
-
-    if (hasNavigoAnnualActiveEntry() || hasNavigoPrelevementsEntry()) {
-      return true;
-    }
-    await wait(250);
-  }
-  return false;
-}
-
-async function findBestNavigoInvoiceControl(billingSelectors, timeoutMs) {
-  const monthlyButton = pick(["#actes-payment-attestation-txt-5"]);
-  if (monthlyButton && !monthlyButton.disabled) return monthlyButton;
-
-  const opened = await openNavigoAttestationFlow(timeoutMs);
-  if (!opened) return null;
-
-  const explicitButton = pick([
-    "#actes-payment-attestation-txt-5",
-    "button#download-certificate-btn",
-    ".dropdown-menu #download-certificate-btn"
-  ]);
-  if (explicitButton && !explicitButton.disabled) return explicitButton;
-  return null;
-}
-
-async function openNavigoAttestationFlow(timeoutMs) {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    const annualActive = findNavigoAnnualActiveEntry();
-    if (annualActive) {
-      realClick(annualActive);
-      await wait(1000);
-    }
-
-    const prelevements = findClickableByLooseText("consulter mes prelevements")
-      || findClickableByLooseText("consulter mes prélèvements");
-    if (prelevements) {
-      realClick(prelevements);
-      await wait(1000);
-    }
-
-    const downloadAttestation = pick(["#label-download"]) || findClickableByLooseText("telecharger mes attestations de prelevements")
-      || findClickableByLooseText("télécharger mes attestations de prélèvements");
-    if (downloadAttestation) {
-      realClick(downloadAttestation);
-      await wait(800);
-    }
-
-    const exactPeriodInput = pick([
-      "ul.dropdown-menu input[name='period'][value='3']",
-      "input[name='period'][value='3']"
-    ]);
-    if (exactPeriodInput) {
-      selectNavigoPeriodInput(exactPeriodInput);
-      await wait(400);
-    } else {
-      const dropDown = pick([
-        "select",
-        "button[aria-haspopup='listbox']",
-        "div[role='combobox']",
-        "input[role='combobox']"
-      ]);
-      if (dropDown) {
-        await selectNavigoLastThreeMonths(dropDown);
-        await wait(600);
-      } else {
-        const optionByText = findClickableByLooseText("3 derniers mois");
-        if (optionByText) {
-          realClick(optionByText);
-          await wait(800);
-        }
-      }
-    }
-
-    const explicitButton = pick([
-      "button#download-certificate-btn",
-      ".dropdown-menu #download-certificate-btn"
-    ]);
-    if (explicitButton) {
-      // Ensure button is enabled after the 3-month period is selected.
-      if (explicitButton.disabled) {
-        const periodInput = pick(["input[name='period'][value='3']"]);
-        if (periodInput) {
-          selectNavigoPeriodInput(periodInput);
-          await wait(400);
-        }
-      }
-      if (!explicitButton.disabled) {
-        return true;
-      }
-    }
-
-    const hasDownloadLink = Boolean(
-      document.querySelector("a[href*='attestation'][href*='prelevement']")
-      || document.querySelector("a[href*='attestation'][href*='pdf']")
-      || document.querySelector("a[href*='prelevement'][href*='pdf']")
-    );
-    if (hasDownloadLink) return true;
-
-    if ((findByLooseText("3 derniers mois")) && hasNavigoPrelevementsEntry()) {
-      return true;
-    }
-    await wait(250);
-  }
-  return false;
-}
-
-function selectNavigoPeriodInput(input) {
-  if (!input) return;
-  try {
-    input.checked = true;
-  } catch (_error) {
-    // noop
-  }
-  input.dispatchEvent(new Event("input", { bubbles: true }));
-  input.dispatchEvent(new Event("change", { bubbles: true }));
-  const label = input.closest("label");
-  if (label && isVisible(label)) {
-    realClick(label);
-  } else if (isVisible(input)) {
-    realClick(input);
-  }
-}
-
-function hasNavigoAnnualActiveEntry() {
-  return Boolean(findNavigoAnnualActiveEntry());
-}
-
-function hasNavigoPrelevementsEntry() {
-  return Boolean(
-    findByLooseText("consulter mes prelevements")
-    || findByLooseText("consulter mes prélèvements")
-    || findByLooseText("telecharger mes attestations de prelevements")
-    || findByLooseText("télécharger mes attestations de prélèvements")
-  );
-}
-
-function findNavigoAnnualActiveEntry() {
-  const links = Array.from(document.querySelectorAll("a[href]")).filter(isVisible);
-  return links.find((link) => {
-    const text = normalizeComparableText(link.textContent || "");
-    const href = String(link.getAttribute("href") || "");
-    return text.includes("navigo annuel") && text.includes("actif") && /\/espace_client\/detail\//.test(href);
-  }) || null;
-}
-
-function findNavigoAnnualContractIdFromList() {
-  const links = Array.from(document.querySelectorAll("a[href*='/espace_client/detail/']"));
-  const annualActive = links.find((link) => {
-    const text = normalizeComparableText(link.textContent || "");
-    return text.includes("navigo annuel") && text.includes("actif");
-  });
-  if (annualActive) {
-    const href = String(annualActive.getAttribute("href") || "");
-    const match = href.match(/\/espace_client\/detail\/([^/?#]+)/i);
-    if (match?.[1]) return match[1];
-  }
-
-  const anyNavigoAnnual = links.find((link) => normalizeComparableText(link.textContent || "").includes("navigo annuel"));
-  if (anyNavigoAnnual) {
-    const href = String(anyNavigoAnnual.getAttribute("href") || "");
-    const match = href.match(/\/espace_client\/detail\/([^/?#]+)/i);
-    if (match?.[1]) return match[1];
-  }
-
-  return null;
-}
-
-async function selectNavigoLastThreeMonths(dropDown) {
-  const tag = String(dropDown.tagName || "").toLowerCase();
-  if (tag === "select") {
-    const option = Array.from(dropDown.options || []).find((opt) => normalizeComparableText(opt.textContent || "").includes("3 derniers mois"));
-    if (option) {
-      dropDown.value = option.value;
-      dropDown.dispatchEvent(new Event("change", { bubbles: true }));
-      return;
-    }
-  }
-
-  realClick(dropDown);
-  await wait(300);
-  const optionByText = findClickableByLooseText("3 derniers mois");
-  if (optionByText) {
-    realClick(optionByText);
-  }
-}
 
 function findLinkByText(words) {
   const links = Array.from(document.querySelectorAll("a,button"));
@@ -1087,86 +485,8 @@ function isOrangeAuthenticated() {
 }
 
 function isProviderAuthenticated(provider) {
-  if (provider === "orange_provider") return isOrangeAuthenticated();
-  if (provider === "sosh_provider") return isSoshAuthenticated();
-  if (provider === "free_mobile_provider") return isFreeMobileAuthenticated();
-  if (provider === "navigo_provider") return isNavigoAuthenticated();
-  const loginSelectors = getProviderLoginSelectors(provider);
-  const hasLoginField = Boolean(queryWithin(document, loginSelectors.username) || queryWithin(document, loginSelectors.password));
-  return !hasLoginField;
-}
-
-function isSoshAuthenticated() {
-  const loginSelectors = getProviderLoginSelectors("sosh_provider");
-  const hasLoginField = Boolean(queryWithin(document, loginSelectors.username) || queryWithin(document, loginSelectors.password));
-  return !hasLoginField;
-}
-
-function isNavigoAuthenticated() {
-  const host = String(location.hostname || "");
-  if (!host.includes("iledefrance-mobilites.fr")) return false;
-
-  const hasLoginFields = Boolean(
-    document.querySelector("#id-Mail")
-    || document.querySelector("#id-pwd")
-    || document.querySelector("#form-log")
-  );
-  if (hasLoginFields) return false;
-
-  const path = String(location.pathname || "");
-  const inMonEspace = host.includes("mon-espace.iledefrance-mobilites.fr");
-  const inJeGereMaCarte = host.includes("jegeremacartenavigo.iledefrance-mobilites.fr");
-      const onLoginPath = /\/auth\/realms\/connect\/login-actions\/authenticate/.test(path);
-      if (onLoginPath) return false;
-
-  const text = normalizeComparableText(document.body?.textContent || "");
-  const hasAuthenticatedMarker = (
-    text.includes("mon espace personnel")
-    || text.includes("mon navigo")
-    || text.includes("mes services")
-    || text.includes("deconnexion")
-    || text.includes("déconnexion")
-  );
-  return (inMonEspace || inJeGereMaCarte) && hasAuthenticatedMarker;
-}
-
-function isFreeMobileAuthenticated() {
-  if (!location.hostname.includes("mobile.free.fr")) return false;
-  if (isFreeMobileOtpRequired()) return false;
-
-  const diagnostics = getFreeMobileAuthDiagnostics();
-  return diagnostics.authenticatedGuess;
-}
-
-function isFreeMobileOtpRequired() {
-  const hasExplicitOtpInput = Boolean(
-    queryWithin(document, [
-      "input[autocomplete='one-time-code']",
-      "input[name='otp']",
-      "input[id='otp']",
-      "input[name='smsCode']",
-      "input[id='smsCode']",
-      "input[name='verificationCode']",
-      "input[id='verificationCode']"
-    ])
-  );
-  if (hasExplicitOtpInput) return true;
-
-  if (hasFreeMobileOtpDigitInputs()) return true;
-
-  const hasGenericOtpInput = Boolean(
-    queryWithin(document, [
-      "input[name*='otp']",
-      "input[id*='otp']",
-      "input[name*='verification']",
-      "input[id*='verification']"
-    ])
-  );
-
-  const hasOtpChallengeText = hasFreeMobileOtpChallengeText();
-
-  // Avoid false positives from account pages (e.g. "SMS/MMS", "Mes codes promo").
-  return hasGenericOtpInput && hasOtpChallengeText;
+  const strategy = getProviderStrategy(provider);
+  return Boolean(strategy.isAuthenticated?.(createProviderContext(provider)));
 }
 
 function getProviderLoginSelectors(provider) {
@@ -1506,106 +826,4 @@ function setNativeInputValue(input, value) {
     return;
   }
   input.value = value;
-}
-
-function getFreeMobileAuthDiagnostics() {
-  const text = getFreeMobileAuthScopeText();
-  const pathname = String(location.pathname || "");
-  const onLoginRoute = /\/account\/v2\/login(?:\/|$)/.test(pathname);
-  const inAccountArea = /^\/account\/v2(?:\/|$)/.test(pathname);
-  const hasExplicitLoginField = Boolean(
-    document.querySelector("#login-username")
-    || document.querySelector("#login-password")
-  );
-  const hasAuthenticatedMarker = Boolean(
-    document.querySelector("#user-login, #user-name, #user-msisdn")
-    || document.querySelector("button[aria-controls='invoices']")
-    || document.querySelector("#invoices")
-    || text.includes("conso et factures")
-    || text.includes("mes factures")
-    || text.includes("deconnexion")
-  );
-  const otpRequired = isFreeMobileOtpRequired();
-  const authenticatedGuess = !otpRequired && (hasAuthenticatedMarker || (inAccountArea && !onLoginRoute && !hasExplicitLoginField));
-
-  return {
-    href: String(location.href || ""),
-    pathname,
-    onLoginRoute,
-    inAccountArea,
-    otpRequired,
-    hasExplicitLoginField,
-    hasAuthenticatedMarker,
-    hasUserLoginNode: Boolean(document.querySelector("#user-login")),
-    hasUserNameNode: Boolean(document.querySelector("#user-name")),
-    hasUserMsisdnNode: Boolean(document.querySelector("#user-msisdn")),
-    hasInvoicesPanel: Boolean(document.querySelector("#invoices")),
-    hasInvoicesTab: Boolean(document.querySelector("button[aria-controls='invoices']")),
-    authenticatedGuess
-  };
-}
-
-function hasFreeMobileOtpChallengeText() {
-  const text = getFreeMobileAuthScopeText();
-  if (!text) return false;
-  return (
-    text.includes("code de verification")
-    || text.includes("code de vérification")
-    || text.includes("code de securite")
-    || text.includes("code de sécurité")
-    || text.includes("saisissez le code")
-    || text.includes("entrer le code")
-    || text.includes("entrez le code")
-    || text.includes("code recu par sms")
-    || text.includes("code reçu par sms")
-    || text.includes("mot de passe a usage unique")
-    || text.includes("mot de passe à usage unique")
-  );
-}
-
-function hasFreeMobileOtpDigitInputs() {
-  const hasSecurityCodeLabel = Boolean(
-    findByLooseText("code de securite")
-    || findByLooseText("code de sécurité")
-  );
-  if (!hasSecurityCodeLabel) return false;
-
-  const singleDigitInputs = Array.from(document.querySelectorAll("input"))
-    .filter((input) => {
-      if (!isVisible(input)) return false;
-      const maxLength = Number(input.getAttribute("maxlength") || 0);
-      const type = String(input.getAttribute("type") || "").toLowerCase();
-      const inputMode = String(input.getAttribute("inputmode") || "").toLowerCase();
-      const isSingleChar = maxLength === 1;
-      const acceptsDigitLike = type === "number" || type === "tel" || inputMode === "numeric" || inputMode === "decimal";
-      return isSingleChar || acceptsDigitLike;
-    });
-
-  return singleDigitInputs.length >= 4 && singleDigitInputs.length <= 8;
-}
-
-function getFreeMobileAuthScopeText() {
-  const roots = [
-    document.querySelector("main"),
-    document.querySelector("form"),
-    document.querySelector("[role='main']"),
-    document.querySelector("#app"),
-    document.querySelector("#root"),
-    document.body
-  ].filter(Boolean);
-
-  const chunks = [];
-  for (const root of roots) {
-    const raw = String(root.textContent || "").trim();
-    if (!raw) continue;
-    chunks.push(raw.slice(0, 4000));
-    if (chunks.length >= 2) break;
-  }
-
-  return normalizeText(chunks.join(" "));
-}
-
-function summarizeFreeMobileDiagnostics() {
-  const d = getFreeMobileAuthDiagnostics();
-  return `href=${d.href} path=${d.pathname} loginRoute=${d.onLoginRoute} accountArea=${d.inAccountArea} otp=${d.otpRequired} loginFields=${d.hasExplicitLoginField} authMarker=${d.hasAuthenticatedMarker} userNodes=${d.hasUserLoginNode || d.hasUserNameNode || d.hasUserMsisdnNode} invoicesTab=${d.hasInvoicesTab} invoicesPanel=${d.hasInvoicesPanel} authGuess=${d.authenticatedGuess}`;
 }
