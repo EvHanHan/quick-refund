@@ -1,11 +1,9 @@
 # 1-click Navan refund chrome extension 
+<img width="563" height="397" alt="SCR-20260305-jwkt" src="https://github.com/user-attachments/assets/48c0d281-5aed-41b5-9ffe-29ed95c47ed3" />
+
 ## Setup
-1. Download the latest release zip file
-2. Unzip it
-4. Open your chome and open your extensions 
-2. Enable **Developer mode**.
-3. Click **Load unpacked** and select the unzipped file.
-4. You are ready to go 
+Go to the release section and download the lastest release. 
+This will help us track the number of downloads. 
 
 ## How to use? 
 Video demo: 
@@ -22,24 +20,14 @@ https://youtu.be/dusQxY_aq6s
 
 ## Technical flow 
 Private unpacked Chrome extension that:
-1. asks provider + billing type for your mobile or internet bill
-2. Logs into the provider and navigates billing.
-3. Downloads/extracts the billing document file.
-4. Opens Navan and pauses for user Google SSO.
-5. Automatically uploads the invoice document in Navan when PDF bytes are captured.
-6. Falls back to manual upload only if provider capture or Navan attachment fails.
-
-## Security defaults
-- Flow state is cleared after completion/failure or 15 minutes inactivity.
+1. asks provider + br 15 minutes inactivity.
 - User manually performs final submit in Navan.
 - Orange PDF byte capture uses Chrome DevTools Protocol (`debugger` permission).
 
+## Note
+[Product story – the why?](https://github.com/EvHanHan/quick-refund/wiki/Product-story-%E2%80%90-the-why%3F)
 
-## Notes
-- Selectors are best-effort and should be hardened against your tenant-specific UI.
-- Ensure automation complies with Orange/Navan terms and your company policy.
+## What does user say
+<img width="608" height="152" alt="image" src="https://github.com/user-attachments/assets/e42d33b1-e775-44fa-b536-67b727390963" />
+<img width="416" height="479" alt="image" src="https://github.com/user-attachments/assets/996d7cfd-2883-4410-9dbb-6b8ad5aaa244" />
 
-## Run tests
-```bash
-npm test
-```
