@@ -431,7 +431,9 @@ async function runStep(state) {
         FlowStatus.STARTED,
         `Provider action DOWNLOAD_AND_EXTRACT_BILL (provider=${flowContext.runConfig.Provider}, timeout=${TIMEOUTS_MS.LONG}ms)`
       );
-      const shouldCaptureOrangePdf = flowContext.runConfig.Provider === "orange_provider";
+      const isOrangeProvider = flowContext.runConfig.Provider === "orange_provider";
+      const isFreeProvider = flowContext.runConfig.Provider === "free_provider";
+      const shouldCaptureOrangePdf = isOrangeProvider;
       const debuggerCapture = shouldCaptureOrangePdf
         ? await startOrangePdfNetworkCapture(flowContext.orangeTabId)
         : null;
@@ -517,6 +519,63 @@ async function runStep(state) {
             : `Debugger capture did not return Orange PDF bytes; manual upload fallback remains available (candidates=${(captureData?.candidates || []).join(" || ") || "none"})`
         );
       }
+
+      let freeCaptureData = null;
+      if (isFreeProvider) {
+        const freePdfUrl = String(result?.document?.sourceUrl || "").trim();
+        emitEvent(
+          FlowState.DOWNLOAD_OR_SELECT_BILL,
+          FlowStatus.STARTED,
+          `Free PDF byte capture started (sourceUrl=${freePdfUrl || "none"})`
+        );
+        if (freePdfUrl) {
+          const fetchedPdf = await fetchPdfDataUrlInTab(flowContext.orangeTabId, freePdfUrl, TIMEOUTS_MS.LONG);
+          if (fetchedPdf?.ok && fetchedPdf?.dataUrl) {
+            freeCaptureData = {
+              dataUrl: fetchedPdf.dataUrl,
+              mimeType: fetchedPdf.mimeType || "application/pdf",
+              responseUrl: fetchedPdf.responseUrl || freePdfUrl
+            };
+            emitEvent(
+              FlowState.DOWNLOAD_OR_SELECT_BILL,
+              FlowStatus.STARTED,
+              `Fetched Free PDF bytes in page context (responseUrl=${freeCaptureData.responseUrl || "none"})`
+            );
+          } else {
+            emitEvent(
+              FlowState.DOWNLOAD_OR_SELECT_BILL,
+              FlowStatus.STARTED,
+              `Free page-context PDF fetch failed (error=${fetchedPdf?.error || "unknown"} mime=${fetchedPdf?.mimeType || "none"} responseUrl=${fetchedPdf?.responseUrl || "none"})`
+            );
+            const bgFetchedPdf = await fetchPdfDataUrlInBackground(freePdfUrl, TIMEOUTS_MS.LONG);
+            if (bgFetchedPdf?.ok && bgFetchedPdf?.dataUrl) {
+              freeCaptureData = {
+                dataUrl: bgFetchedPdf.dataUrl,
+                mimeType: bgFetchedPdf.mimeType || "application/pdf",
+                responseUrl: bgFetchedPdf.responseUrl || freePdfUrl
+              };
+              emitEvent(
+                FlowState.DOWNLOAD_OR_SELECT_BILL,
+                FlowStatus.STARTED,
+                `Fetched Free PDF bytes in background context (responseUrl=${freeCaptureData.responseUrl || "none"})`
+              );
+            } else {
+              emitEvent(
+                FlowState.DOWNLOAD_OR_SELECT_BILL,
+                FlowStatus.STARTED,
+                `Free PDF fetch failed in both contexts (pageError=${fetchedPdf?.error || "unknown"} bgError=${bgFetchedPdf?.error || "unknown"} pageMime=${fetchedPdf?.mimeType || "none"} bgMime=${bgFetchedPdf?.mimeType || "none"} pageResponseUrl=${fetchedPdf?.responseUrl || "none"} bgResponseUrl=${bgFetchedPdf?.responseUrl || "none"})`
+              );
+            }
+          }
+        } else {
+          emitEvent(
+            FlowState.DOWNLOAD_OR_SELECT_BILL,
+            FlowStatus.STARTED,
+            "Free PDF source URL is missing; manual upload fallback remains available"
+          );
+        }
+      }
+
       flowContext.documentPayload = captureData?.dataUrl
         ? {
           ...result.document,
@@ -524,7 +583,14 @@ async function runStep(state) {
           mimeType: captureData.mimeType || result.document.mimeType || "application/pdf",
           manualUploadRequired: false
         }
-        : result.document;
+        : freeCaptureData?.dataUrl
+          ? {
+            ...result.document,
+            dataUrl: freeCaptureData.dataUrl,
+            mimeType: freeCaptureData.mimeType || result.document.mimeType || "application/pdf",
+            manualUploadRequired: false
+          }
+          : result.document;
       return;
     }
     case FlowState.OPEN_NAVAN:
