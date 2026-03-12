@@ -433,8 +433,9 @@ async function runStep(state) {
       );
       const providerId = normalizeProviderId(flowContext.runConfig.Provider);
       const isOrangeProvider = providerId === "orange_provider";
+      const isSoshProvider = providerId === "sosh_provider";
       const isFreeProvider = providerId === "free_provider";
-      const shouldCaptureOrangePdf = isOrangeProvider;
+      const shouldCaptureOrangePdf = isOrangeProvider || isSoshProvider;
       const debuggerCapture = shouldCaptureOrangePdf
         ? await startOrangePdfNetworkCapture(flowContext.orangeTabId)
         : null;
@@ -636,6 +637,62 @@ async function runStep(state) {
         }
       }
 
+      let soshCaptureData = null;
+      if (isSoshProvider) {
+        const soshPdfUrl = sourceUrl;
+        emitEvent(
+          FlowState.DOWNLOAD_OR_SELECT_BILL,
+          FlowStatus.STARTED,
+          `Sosh PDF byte capture started (sourceUrl=${soshPdfUrl || "none"})`
+        );
+        if (soshPdfUrl) {
+          const fetchedPdf = await fetchPdfDataUrlInTab(flowContext.orangeTabId, soshPdfUrl, TIMEOUTS_MS.LONG);
+          if (fetchedPdf?.ok && fetchedPdf?.dataUrl) {
+            soshCaptureData = {
+              dataUrl: fetchedPdf.dataUrl,
+              mimeType: fetchedPdf.mimeType || "application/pdf",
+              responseUrl: fetchedPdf.responseUrl || soshPdfUrl
+            };
+            emitEvent(
+              FlowState.DOWNLOAD_OR_SELECT_BILL,
+              FlowStatus.STARTED,
+              `Fetched Sosh PDF bytes in page context (responseUrl=${soshCaptureData.responseUrl || "none"})`
+            );
+          } else {
+            emitEvent(
+              FlowState.DOWNLOAD_OR_SELECT_BILL,
+              FlowStatus.STARTED,
+              `Sosh page-context PDF fetch failed (error=${fetchedPdf?.error || "unknown"} mime=${fetchedPdf?.mimeType || "none"} responseUrl=${fetchedPdf?.responseUrl || "none"})`
+            );
+            const bgFetchedPdf = await fetchPdfDataUrlInBackground(soshPdfUrl, TIMEOUTS_MS.LONG);
+            if (bgFetchedPdf?.ok && bgFetchedPdf?.dataUrl) {
+              soshCaptureData = {
+                dataUrl: bgFetchedPdf.dataUrl,
+                mimeType: bgFetchedPdf.mimeType || "application/pdf",
+                responseUrl: bgFetchedPdf.responseUrl || soshPdfUrl
+              };
+              emitEvent(
+                FlowState.DOWNLOAD_OR_SELECT_BILL,
+                FlowStatus.STARTED,
+                `Fetched Sosh PDF bytes in background context (responseUrl=${soshCaptureData.responseUrl || "none"})`
+              );
+            } else {
+              emitEvent(
+                FlowState.DOWNLOAD_OR_SELECT_BILL,
+                FlowStatus.STARTED,
+                `Sosh PDF fetch failed in both contexts (pageError=${fetchedPdf?.error || "unknown"} bgError=${bgFetchedPdf?.error || "unknown"} pageMime=${fetchedPdf?.mimeType || "none"} bgMime=${bgFetchedPdf?.mimeType || "none"} pageResponseUrl=${fetchedPdf?.responseUrl || "none"} bgResponseUrl=${bgFetchedPdf?.responseUrl || "none"})`
+              );
+            }
+          }
+        } else {
+          emitEvent(
+            FlowState.DOWNLOAD_OR_SELECT_BILL,
+            FlowStatus.STARTED,
+            "Sosh PDF source URL is missing; manual upload fallback remains available"
+          );
+        }
+      }
+
       flowContext.documentPayload = captureData?.dataUrl
         ? {
           ...result.document,
@@ -648,6 +705,13 @@ async function runStep(state) {
             ...result.document,
             dataUrl: redCaptureData.dataUrl,
             mimeType: redCaptureData.mimeType || result.document.mimeType || "application/pdf",
+            manualUploadRequired: false
+          }
+        : soshCaptureData?.dataUrl
+          ? {
+            ...result.document,
+            dataUrl: soshCaptureData.dataUrl,
+            mimeType: soshCaptureData.mimeType || result.document.mimeType || "application/pdf",
             manualUploadRequired: false
           }
         : freeCaptureData?.dataUrl
