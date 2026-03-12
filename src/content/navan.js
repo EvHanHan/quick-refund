@@ -1,4 +1,7 @@
 /* global chrome, __EXT_SELECTORS__ */
+const NAVAN_UPLOAD_AUTOFILL_ENABLED = false;
+const NAVAN_ROUTE_WATCHER_AUTOFILL_ENABLED = true;
+
 (function initNavanContent() {
   if (!location.hostname.includes("navan.com")) return;
 
@@ -18,8 +21,10 @@
     return true;
   });
 
-  setupNavanRouteWatcher();
-  scheduleAutoFillOnForm();
+  if (NAVAN_ROUTE_WATCHER_AUTOFILL_ENABLED) {
+    setupNavanRouteWatcher();
+    scheduleAutoFillOnForm();
+  }
 })();
 
 async function handleNavanAction(action, payload) {
@@ -133,33 +138,52 @@ async function uploadDocument(documentPayload) {
     };
   }
 
-  await wait(5_000);
-  const created = await waitAndClickCreateSingleTransaction(5_000);
-  if (!created) {
+  await wait(3_000);
+  const createFlow = await waitForCreateSingleTransactionFlow(20_000);
+  if (!createFlow.ok) {
     return {
       uploaded: false,
       manualUploadRequired: true,
       reason: "create_single_transaction_not_found",
-      debug: attached.debug || {}
+      debug: {
+        ...(attached.debug || {}),
+        ...(createFlow.debug || {})
+      }
     };
   }
 
-  const descriptionPrefilled = await waitForDescriptionPrefill(25_000);
-  if (descriptionPrefilled) {
-    setDescriptionFixed("monthly invoice");
-  }
+  let descriptionPrefilled = null;
+  let hintsApplied = false;
+  let expenseTypeSelected = false;
+  let expenseTypeDebug = null;
 
-  const hintsApplied = await applyNavanHints(navanHints);
-  const expenseTypeSelected = await finalizeExpenseTypeSelection(navanHints.expenseType);
+  if (NAVAN_UPLOAD_AUTOFILL_ENABLED) {
+    if (createFlow.debug?.modalCleared === true) {
+      await wait(3_000);
+    }
+    descriptionPrefilled = await waitForDescriptionPrefill(3_000);
+    if (descriptionPrefilled) {
+      setDescriptionFixed("monthly invoice");
+    }
+
+    hintsApplied = await applyNavanHints(navanHints);
+    const expenseTypeResult = await finalizeExpenseTypeSelection(navanHints.expenseType);
+    expenseTypeSelected = Boolean(expenseTypeResult?.selected);
+    expenseTypeDebug = expenseTypeResult?.debug || null;
+  }
   return {
     uploaded: true,
     attachedFileName: attached.fileName,
-    createSingleTransactionClicked: created,
+    createSingleTransactionClicked: createFlow.clicked,
     expenseTypeSelected,
     hintsApplied,
     debug: {
       ...(attached.debug || {}),
-      descriptionPrefilled
+      ...(createFlow.debug || {}),
+      uploadAutofillEnabled: NAVAN_UPLOAD_AUTOFILL_ENABLED,
+      routeWatcherAutofillEnabled: NAVAN_ROUTE_WATCHER_AUTOFILL_ENABLED,
+      descriptionPrefilled,
+      expenseTypeDebug
     }
   };
 }
@@ -278,10 +302,30 @@ function scheduleAutoFillOnForm() {
   window.__NAVAN_AUTOFILL_RUNNING = true;
   const maxWaitMs = 60_000;
   const pollMs = 500;
+  const settleAfterModalMs = 1_500;
   const start = Date.now();
+  let modalWasVisible = false;
+  let postModalSettled = false;
 
   const tick = async () => {
     if (window.__NAVAN_AUTOFILL_DONE) return;
+    if (isCreatingTransactionModalVisible()) {
+      modalWasVisible = true;
+      postModalSettled = false;
+      if (Date.now() - start < maxWaitMs) {
+        setTimeout(tick, pollMs);
+      } else {
+        window.__NAVAN_AUTOFILL_RUNNING = false;
+      }
+      return;
+    }
+
+    if (modalWasVisible && !postModalSettled) {
+      postModalSettled = true;
+      await wait(settleAfterModalMs);
+      if (window.__NAVAN_AUTOFILL_DONE) return;
+    }
+
     const ready = await tryAutoFillExpenseThenDescription();
     if (ready) {
       window.__NAVAN_AUTOFILL_DONE = true;
@@ -300,6 +344,18 @@ function scheduleAutoFillOnForm() {
 
 function isNavanTransactionFormPage() {
   return location.pathname.includes("/transactions/new-redesign/");
+}
+
+function isNavanTransactionFormReady() {
+  if (!isNavanTransactionFormPage()) return false;
+
+  const s = window.__EXT_SELECTORS__.navan.transactionForm;
+  return Boolean(
+    queryAny(s.date, { allowHidden: true })
+    || queryAny(s.description, { allowHidden: true })
+    || findExpenseTypeInput()
+    || findCustomDescriptionInput()
+  );
 }
 
 function setupNavanRouteWatcher() {
@@ -365,19 +421,8 @@ async function ensureExpenseTypeSelected(expenseTypeLabel) {
     return true;
   }
 
-  openExpenseTypeDropdown(input);
-  await wait(200);
-  await scrollExpenseTypeListToEnd(3000);
-
-  const desired = normalizeComparableText(expenseTypeLabel || "");
-  typeExpenseTypeQuery(input, expenseTypeLabel || "");
-  const option = await waitForExpenseTypeOption(desired, 8000);
-  if (!option) return false;
-  realClick(option);
-  await wait(400);
-
-  const updated = normalizeComparableText(input.value || "");
-  return updated.includes("work from home") || updated.includes("teletravail");
+  const result = await typeExpenseTypeOnlyWithDebug(expenseTypeLabel || "work from home");
+  return Boolean(result?.typed);
 }
 
 function openExpenseTypeDropdown(input) {
@@ -399,6 +444,16 @@ function typeExpenseTypeQuery(input, label) {
   input.value = value;
   input.dispatchEvent(new Event("input", { bubbles: true }));
   input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true }));
+}
+
+function typeExpenseTypeQueryOnly(input, label) {
+  if (!input) return;
+  const value = String(label || "");
+  input.focus?.();
+  input.value = "";
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.value = value;
+  input.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
 async function waitForExpenseTypeOption(looseTarget, timeoutMs) {
@@ -627,6 +682,161 @@ async function waitAndClickCreateSingleTransaction(timeoutMs) {
   return false;
 }
 
+async function waitForCreateSingleTransactionFlow(timeoutMs) {
+  if (isNavanTransactionFormReady()) {
+    const modalWait = await waitForCreatingTransactionModalToClear(Math.min(8_000, timeoutMs));
+    return {
+      ok: true,
+      clicked: false,
+      debug: {
+        alreadyOnForm: true,
+        modalCleared: modalWait.cleared,
+        dismissNudgeCount: modalWait.dismissNudgeCount
+      }
+    };
+  }
+
+  const clicked = await waitAndClickCreateSingleTransaction(Math.min(8_000, timeoutMs));
+  if (!clicked) {
+    return {
+      ok: false,
+      clicked: false,
+      debug: {
+        alreadyOnForm: false,
+        formReady: isNavanTransactionFormReady(),
+        modalVisible: isCreatingTransactionModalVisible()
+      }
+    };
+  }
+
+  const formReady = await waitForTransactionFormReady(timeoutMs);
+  const modalWait = formReady
+    ? await waitForCreatingTransactionModalToClear(Math.min(15_000, timeoutMs))
+    : { cleared: false, dismissNudgeCount: 0 };
+  return {
+    ok: formReady,
+    clicked: true,
+    debug: {
+      alreadyOnForm: false,
+      formReady,
+      modalCleared: modalWait.cleared,
+      modalStillVisible: formReady && !modalWait.cleared,
+      dismissNudgeCount: modalWait.dismissNudgeCount
+    }
+  };
+}
+
+async function waitForTransactionFormReady(timeoutMs) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (isNavanTransactionFormReady()) return true;
+    await wait(250);
+  }
+  return false;
+}
+
+async function waitForCreatingTransactionModalToClear(timeoutMs) {
+  const start = Date.now();
+  const deadline = start + timeoutMs;
+  let pollCount = 0;
+  let dismissNudgeCount = 0;
+
+  while (Date.now() < deadline) {
+    const visible = isCreatingTransactionModalVisible();
+    if (visible) {
+      if (shouldNudgeModalDismiss(Date.now() - start, pollCount)) {
+        nudgeCreatingTransactionModalDismiss();
+        dismissNudgeCount += 1;
+      }
+    }
+    if (!visible) {
+      return { cleared: true, dismissNudgeCount };
+    }
+    pollCount += 1;
+    await wait(250);
+  }
+  return { cleared: false, dismissNudgeCount };
+}
+
+function isCreatingTransactionModalVisible() {
+  const textNode = findCreatingTransactionTextNode();
+  const lottieNode = findCreatingTransactionLottieNode();
+  const root = resolveModalRoot(textNode || lottieNode);
+  return Boolean(root && isVisible(root));
+}
+
+function findCreatingTransactionTextNode() {
+  const nodes = Array.from(document.querySelectorAll("h1,h2,h3,div,span,p"));
+  return nodes.find((node) => isVisible(node) && normalizeText(node.textContent).includes("creating a transaction")) || null;
+}
+
+function findCreatingTransactionLottieNode() {
+  const node = querySelectorDeep("#animation-container.main, [aria-label*='Lottie animation'], lottie-player");
+  return (node && isVisible(node)) ? node : null;
+}
+
+function resolveModalRoot(node) {
+  if (!node) return null;
+  const root = node.closest?.(
+    "[role='dialog'], .modal-container, .cdk-overlay-pane, .cdk-global-overlay-wrapper, pb-modal, section[class*='modal'], div[class*='modal']"
+  );
+  return root || node;
+}
+
+function shouldNudgeModalDismiss(elapsedMs, pollCount) {
+  if (!isNavanTransactionFormPage()) return false;
+  if (elapsedMs < 1000) return false;
+  return pollCount % 4 === 0;
+}
+
+function nudgeCreatingTransactionModalDismiss() {
+  clickNavanModalBackdrop();
+  dispatchEscapeKey();
+  clickFarRightOfPage();
+  clickPageSide();
+}
+
+function dispatchEscapeKey() {
+  const target = document.activeElement || document.body;
+  if (!target) return;
+  target.dispatchEvent(new KeyboardEvent("keydown", {
+    key: "Escape",
+    code: "Escape",
+    bubbles: true,
+    cancelable: true
+  }));
+  target.dispatchEvent(new KeyboardEvent("keyup", {
+    key: "Escape",
+    code: "Escape",
+    bubbles: true,
+    cancelable: true
+  }));
+}
+
+function clickNavanModalBackdrop() {
+  const candidates = Array.from(document.querySelectorAll(
+    ".cdk-overlay-backdrop, .cdk-overlay-container, .cdk-global-overlay-wrapper, [role='dialog']"
+  ));
+  for (const node of candidates) {
+    if (!(node instanceof HTMLElement) || !isVisible(node)) continue;
+    const style = window.getComputedStyle(node);
+    if (!style || style.pointerEvents === "none") continue;
+    clickElementCenter(node);
+    break;
+  }
+}
+
+function clickElementCenter(target) {
+  const rect = target.getBoundingClientRect();
+  if (!rect.width || !rect.height) return;
+  const x = rect.left + rect.width / 2;
+  const y = rect.top + rect.height / 2;
+  target.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0 }));
+  target.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0 }));
+  target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0 }));
+  target.click?.();
+}
+
 function findCreateSingleTransactionButton() {
   const selectors = window.__EXT_SELECTORS__.navan.home.createSingleTransaction || [];
   const bySelectors = queryAny(selectors);
@@ -644,11 +854,56 @@ function findCreateSingleTransactionButton() {
 }
 
 async function finalizeExpenseTypeSelection(expenseTypeHint) {
-  await wait(15_000);
+  await waitForExpenseTypeSectionReady(5_000);
   clickDraftTag();
-  await wait(400);
-  const desiredType = normalizeText(expenseTypeHint || "work from home");
-  return selectExpenseTypeByLabel(desiredType, 20_000);
+  await wait(250);
+  const desiredType = String(expenseTypeHint || "work from home").trim() || "work from home";
+  const typedResult = await typeExpenseTypeOnlyWithDebug(desiredType);
+  return {
+    selected: false,
+    debug: {
+      ...(typedResult?.debug || {}),
+      manualOptionClickRequired: true
+    }
+  };
+}
+
+async function typeExpenseTypeOnlyWithDebug(optionText) {
+  const input = findExpenseTypeInput();
+  if (!input) {
+    return {
+      typed: false,
+      debug: {
+        reason: "input_not_found",
+        typedLabel: String(optionText || "")
+      }
+    };
+  }
+
+  const typedLabel = normalizeComparableText(optionText || "");
+  realClick(input);
+  input.focus?.();
+  await wait(200);
+  typeExpenseTypeQueryOnly(input, optionText || "");
+  await wait(200);
+
+  return {
+    typed: true,
+    debug: {
+      typedOnly: true,
+      typedLabel,
+      finalValue: normalizeComparableText(input?.value || "")
+    }
+  };
+}
+
+async function waitForExpenseTypeSectionReady(timeoutMs) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (findExpenseTypeInput()) return true;
+    await wait(250);
+  }
+  return false;
 }
 
 function clickPageSide() {
@@ -723,6 +978,72 @@ async function selectExpenseTypeByLabel(optionText, timeoutMs) {
   return false;
 }
 
+async function selectExpenseTypeByTypingAndFirstOption(optionText, timeoutMs) {
+  const result = await selectExpenseTypeByTypingAndFirstOptionWithDebug(optionText, timeoutMs);
+  return Boolean(result?.selected);
+}
+
+async function selectExpenseTypeByTypingAndFirstOptionWithDebug(optionText, timeoutMs) {
+  const input = findExpenseTypeInput();
+  if (!input) {
+    return { selected: false, debug: { reason: "input_not_found", typedLabel: String(optionText || "") } };
+  }
+
+  const typedLabel = normalizeComparableText(optionText || "");
+  realClick(input);
+  input.focus?.();
+  await wait(200);
+  typeExpenseTypeQueryOnly(input, optionText || "");
+
+  const option = await waitForFirstExpenseTypeOption(timeoutMs);
+  if (!option) {
+    return {
+      selected: false,
+      debug: {
+        reason: "no_dropdown_option",
+        typedLabel,
+        optionCount: getRawExpenseTypeOptionNodes().length,
+        finalValue: normalizeComparableText(input?.value || "")
+      }
+    };
+  }
+  const optionLabel = normalizeComparableText(option.textContent || "");
+  const typedValueBeforeClick = normalizeComparableText(input?.value || "");
+  realClick(option);
+  const confirmed = await waitForExpenseTypeSelection(input, optionLabel, typedValueBeforeClick, 2_000);
+  if (confirmed) {
+    return {
+      selected: true,
+      debug: {
+        typedLabel,
+        clickedOption: optionLabel || "unknown",
+        confirmedAfterClick: true,
+        confirmedAfterEnter: false,
+        usedEnterFallback: false,
+        optionClickedTag: String(option.tagName || "").toLowerCase(),
+        optionClickedClass: String(option.className || "").slice(0, 80),
+        finalValue: normalizeComparableText(input?.value || "")
+      }
+    };
+  }
+
+  input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true }));
+  const confirmedAfterEnter = await waitForExpenseTypeSelection(input, optionLabel, typedValueBeforeClick, 1_500);
+  return {
+    selected: confirmedAfterEnter,
+    debug: {
+      typedLabel,
+      clickedOption: optionLabel || "unknown",
+      confirmedAfterClick: false,
+      confirmedAfterEnter,
+      usedEnterFallback: true,
+      optionClickedTag: String(option.tagName || "").toLowerCase(),
+      optionClickedClass: String(option.className || "").slice(0, 80),
+      finalValue: normalizeComparableText(input?.value || "")
+    }
+  };
+}
+
 function findExpenseTypeInput() {
   const byTestId = querySelectorDeep("[data-testid='expense-type-form'] input[type='text']");
   if (byTestId) return byTestId;
@@ -743,15 +1064,54 @@ function findExpenseTypeOption(looseTarget) {
   }) || null;
 }
 
+async function waitForFirstExpenseTypeOption(timeoutMs) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const candidates = getExpenseTypeOptionCandidates();
+    if (candidates.length > 0) return candidates[0];
+    await wait(250);
+  }
+  return null;
+}
+
+async function waitForExpenseTypeSelection(input, optionLabel, initialValue, timeoutMs) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const current = normalizeComparableText(input?.value || "");
+    if (!current) {
+      await wait(200);
+      continue;
+    }
+    const dropdownOpen = isExpenseTypeDropdownOpen();
+    const valueChangedAfterClick = initialValue ? current !== initialValue : true;
+    if (!dropdownOpen && valueChangedAfterClick) return true;
+    if (!dropdownOpen && optionLabel && (current.includes(optionLabel) || optionLabel.includes(current))) return true;
+    await wait(200);
+  }
+  return false;
+}
+
 function getExpenseTypeOptionCandidates() {
+  const nodes = getRawExpenseTypeOptionNodes();
+  return nodes
+    .map((node) => resolveClickableTarget(node))
+    .filter((node, index, arr) => node && arr.indexOf(node) === index);
+}
+
+function getRawExpenseTypeOptionNodes() {
   const overlayRoot = document.querySelector(".cdk-overlay-container") || document.body;
-  const candidates = Array.from(overlayRoot.querySelectorAll("[role='option'],li,button,div,span"));
+  const candidates = Array.from(overlayRoot.querySelectorAll(
+    "[role='option'], li[role='option'], li[aria-selected], button[role='option'], pb-option, [id^='pb-option-'], .options-wrapper .option"
+  ));
   return candidates.filter((node) => {
+    if (!(node instanceof HTMLElement)) return false;
     if (!isVisible(node)) return false;
-    const text = normalizeComparableText(node.textContent);
-    if (!text || text.length < 2 || text.length > 80) return false;
     return true;
   });
+}
+
+function isExpenseTypeDropdownOpen() {
+  return getRawExpenseTypeOptionNodes().length > 0;
 }
 
 function normalizeComparableText(value) {

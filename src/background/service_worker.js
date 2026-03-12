@@ -82,9 +82,9 @@ void scheduleMonthlyReminder();
 void refreshReminderBadge();
 
 const stateOrder = [
-  FlowState.OPEN_ORANGE_LOGIN,
-  FlowState.AUTH_ORANGE,
-  FlowState.NAVIGATE_ORANGE_BILLING,
+  FlowState.OPEN_PROVIDER_LOGIN,
+  FlowState.AUTH_PROVIDER,
+  FlowState.NAVIGATE_PROVIDER_BILLING,
   FlowState.DOWNLOAD_OR_SELECT_BILL,
   FlowState.OPEN_NAVAN,
   FlowState.OPEN_LIQUID_HOME,
@@ -211,7 +211,7 @@ async function startFlow(runConfig) {
   };
 
   emitEvent(
-    FlowState.CAPTURE_ORANGE_CREDENTIALS,
+    FlowState.CAPTURE_PROVIDER_CREDENTIALS,
     FlowStatus.SUCCESS,
     "Flow settings captured for this run"
   );
@@ -237,6 +237,8 @@ async function resumeFlow(payload) {
     ? "User resumed after Orange captcha"
     : resumedReason === "PROVIDER_MANUAL_LOGIN"
       ? "User resumed after provider manual login"
+      : resumedReason === "NAVAN_MODAL_STUCK"
+        ? "User resumed after Navan processing modal"
     : resumedReason === "NAVAN_MANUAL_UPLOAD"
       ? "User resumed after manual Navan upload"
       : "User resumed after Navan SSO checkpoint";
@@ -289,16 +291,16 @@ async function runStateMachine(runId) {
 async function runStep(state) {
   const providerConfig = PROVIDER_CONFIGS[flowContext.runConfig.Provider] || PROVIDER_CONFIGS.orange_provider;
   switch (state) {
-    case FlowState.OPEN_ORANGE_LOGIN:
+    case FlowState.OPEN_PROVIDER_LOGIN:
       flowContext.orangeTabId = await ensureTab(
         providerConfig.loginUrl,
         flowContext.orangeTabId
       );
       return;
-    case FlowState.AUTH_ORANGE:
+    case FlowState.AUTH_PROVIDER:
       {
         emitEvent(
-          FlowState.AUTH_ORANGE,
+          FlowState.AUTH_PROVIDER,
           FlowStatus.STARTED,
           `Provider action CHECK_PROVIDER_SESSION (provider=${flowContext.runConfig.Provider}, timeout=${TIMEOUTS_MS.DEFAULT}ms)`
         );
@@ -306,13 +308,13 @@ async function runStep(state) {
           Provider: flowContext.runConfig.Provider
         }, TIMEOUTS_MS.DEFAULT);
         emitEvent(
-          FlowState.AUTH_ORANGE,
+          FlowState.AUTH_PROVIDER,
           FlowStatus.STARTED,
           `Provider action CHECK_PROVIDER_SESSION completed (authenticated=${Boolean(session?.authenticated)})`
         );
         if (flowContext.runConfig.Provider === "free_mobile_provider" && session?.diagnostics) {
           emitEvent(
-            FlowState.AUTH_ORANGE,
+            FlowState.AUTH_PROVIDER,
             FlowStatus.STARTED,
             `Free Mobile session probe: auth=${Boolean(session?.authenticated)} | ${formatFreeMobileDiagnostics(session.diagnostics)}`
           );
@@ -320,7 +322,7 @@ async function runStep(state) {
         if (session?.authenticated) {
           clearRunPassword();
           emitEvent(
-            FlowState.AUTH_ORANGE,
+            FlowState.AUTH_PROVIDER,
             FlowStatus.SUCCESS,
             `${flowContext.runConfig.Provider} session already active, skipping login${flowContext.runConfig.Provider === "free_mobile_provider" && session?.diagnostics ? ` | ${formatFreeMobileDiagnostics(session.diagnostics)}` : ""}`
           );
@@ -328,7 +330,7 @@ async function runStep(state) {
         }
 
         emitEvent(
-          FlowState.AUTH_ORANGE,
+          FlowState.AUTH_PROVIDER,
           FlowStatus.STARTED,
           `Provider action AUTH_PROVIDER (provider=${flowContext.runConfig.Provider}, timeout=${TIMEOUTS_MS.DEFAULT}ms)`
         );
@@ -336,13 +338,13 @@ async function runStep(state) {
           Provider: flowContext.runConfig.Provider
         }, TIMEOUTS_MS.DEFAULT);
         emitEvent(
-          FlowState.AUTH_ORANGE,
+          FlowState.AUTH_PROVIDER,
           FlowStatus.STARTED,
           `Provider action AUTH_PROVIDER completed (authenticated=${Boolean(authResult?.authenticated)} manual=${Boolean(authResult?.manualLoginRequired)} captcha=${Boolean(authResult?.captchaRequired)})`
         );
         if (flowContext.runConfig.Provider === "free_mobile_provider") {
           emitEvent(
-            FlowState.AUTH_ORANGE,
+            FlowState.AUTH_PROVIDER,
             FlowStatus.STARTED,
             `Free Mobile auth result: manual=${Boolean(authResult?.manualLoginRequired)} captcha=${Boolean(authResult?.captchaRequired)} otp=${Boolean(authResult?.smsCodeRequired)}`
           );
@@ -352,7 +354,7 @@ async function runStep(state) {
           flowContext.waitingForUser = true;
           flowContext.waitingReason = "PROVIDER_MANUAL_LOGIN";
           emitEvent(
-            FlowState.AUTH_ORANGE,
+            FlowState.AUTH_PROVIDER,
             FlowStatus.WAITING_USER,
             "Finish login in provider tab. The flow resumes automatically after provider login is detected."
           );
@@ -360,13 +362,13 @@ async function runStep(state) {
         } else if (authResult?.captchaRequired) {
           flowContext.waitingForUser = true;
           flowContext.waitingReason = "ORANGE_CAPTCHA";
-          emitEvent(FlowState.AUTH_ORANGE, FlowStatus.WAITING_USER, "Captcha detected on provider. Solve it in the tab, or click Stop to cancel.");
+          emitEvent(FlowState.AUTH_PROVIDER, FlowStatus.WAITING_USER, "Captcha detected on provider. Solve it in the tab, or click Stop to cancel.");
         } else {
           clearRunPassword();
         }
       }
       return;
-    case FlowState.NAVIGATE_ORANGE_BILLING:
+    case FlowState.NAVIGATE_PROVIDER_BILLING:
       // Free ADSL uses session params in URL (ex: idt), avoid overriding current session page.
       if (
         flowContext.runConfig.Provider !== "free_provider"
@@ -380,7 +382,7 @@ async function runStep(state) {
       }
       {
         emitEvent(
-          FlowState.NAVIGATE_ORANGE_BILLING,
+          FlowState.NAVIGATE_PROVIDER_BILLING,
           FlowStatus.STARTED,
           `Provider action NAVIGATE_BILLING (provider=${flowContext.runConfig.Provider}, timeout=${TIMEOUTS_MS.DEFAULT}ms)`
         );
@@ -389,7 +391,7 @@ async function runStep(state) {
         AccountType: flowContext.runConfig.AccountType
       }, TIMEOUTS_MS.DEFAULT);
         emitEvent(
-          FlowState.NAVIGATE_ORANGE_BILLING,
+          FlowState.NAVIGATE_PROVIDER_BILLING,
           FlowStatus.STARTED,
           `Provider action NAVIGATE_BILLING completed (navigated=${Boolean(navigation?.navigated)} detailUrl=${navigation?.detailUrl || "none"})`
         );
@@ -404,7 +406,7 @@ async function runStep(state) {
             if (onPrelevements) break;
 
             emitEvent(
-              FlowState.NAVIGATE_ORANGE_BILLING,
+              FlowState.NAVIGATE_PROVIDER_BILLING,
               FlowStatus.STARTED,
               `Navigo extra NAVIGATE_BILLING pass ${attempt}/2`
             );
@@ -413,7 +415,7 @@ async function runStep(state) {
               AccountType: flowContext.runConfig.AccountType
             }, TIMEOUTS_MS.DEFAULT);
             emitEvent(
-              FlowState.NAVIGATE_ORANGE_BILLING,
+              FlowState.NAVIGATE_PROVIDER_BILLING,
               FlowStatus.STARTED,
               `Navigo extra pass ${attempt}/2 resolved detailUrl=${navigation?.detailUrl || "none"}`
             );
@@ -429,7 +431,9 @@ async function runStep(state) {
         FlowStatus.STARTED,
         `Provider action DOWNLOAD_AND_EXTRACT_BILL (provider=${flowContext.runConfig.Provider}, timeout=${TIMEOUTS_MS.LONG}ms)`
       );
-      const shouldCaptureOrangePdf = flowContext.runConfig.Provider === "orange_provider";
+      const isOrangeProvider = flowContext.runConfig.Provider === "orange_provider";
+      const isFreeProvider = flowContext.runConfig.Provider === "free_provider";
+      const shouldCaptureOrangePdf = isOrangeProvider;
       const debuggerCapture = shouldCaptureOrangePdf
         ? await startOrangePdfNetworkCapture(flowContext.orangeTabId)
         : null;
@@ -515,6 +519,63 @@ async function runStep(state) {
             : `Debugger capture did not return Orange PDF bytes; manual upload fallback remains available (candidates=${(captureData?.candidates || []).join(" || ") || "none"})`
         );
       }
+
+      let freeCaptureData = null;
+      if (isFreeProvider) {
+        const freePdfUrl = String(result?.document?.sourceUrl || "").trim();
+        emitEvent(
+          FlowState.DOWNLOAD_OR_SELECT_BILL,
+          FlowStatus.STARTED,
+          `Free PDF byte capture started (sourceUrl=${freePdfUrl || "none"})`
+        );
+        if (freePdfUrl) {
+          const fetchedPdf = await fetchPdfDataUrlInTab(flowContext.orangeTabId, freePdfUrl, TIMEOUTS_MS.LONG);
+          if (fetchedPdf?.ok && fetchedPdf?.dataUrl) {
+            freeCaptureData = {
+              dataUrl: fetchedPdf.dataUrl,
+              mimeType: fetchedPdf.mimeType || "application/pdf",
+              responseUrl: fetchedPdf.responseUrl || freePdfUrl
+            };
+            emitEvent(
+              FlowState.DOWNLOAD_OR_SELECT_BILL,
+              FlowStatus.STARTED,
+              `Fetched Free PDF bytes in page context (responseUrl=${freeCaptureData.responseUrl || "none"})`
+            );
+          } else {
+            emitEvent(
+              FlowState.DOWNLOAD_OR_SELECT_BILL,
+              FlowStatus.STARTED,
+              `Free page-context PDF fetch failed (error=${fetchedPdf?.error || "unknown"} mime=${fetchedPdf?.mimeType || "none"} responseUrl=${fetchedPdf?.responseUrl || "none"})`
+            );
+            const bgFetchedPdf = await fetchPdfDataUrlInBackground(freePdfUrl, TIMEOUTS_MS.LONG);
+            if (bgFetchedPdf?.ok && bgFetchedPdf?.dataUrl) {
+              freeCaptureData = {
+                dataUrl: bgFetchedPdf.dataUrl,
+                mimeType: bgFetchedPdf.mimeType || "application/pdf",
+                responseUrl: bgFetchedPdf.responseUrl || freePdfUrl
+              };
+              emitEvent(
+                FlowState.DOWNLOAD_OR_SELECT_BILL,
+                FlowStatus.STARTED,
+                `Fetched Free PDF bytes in background context (responseUrl=${freeCaptureData.responseUrl || "none"})`
+              );
+            } else {
+              emitEvent(
+                FlowState.DOWNLOAD_OR_SELECT_BILL,
+                FlowStatus.STARTED,
+                `Free PDF fetch failed in both contexts (pageError=${fetchedPdf?.error || "unknown"} bgError=${bgFetchedPdf?.error || "unknown"} pageMime=${fetchedPdf?.mimeType || "none"} bgMime=${bgFetchedPdf?.mimeType || "none"} pageResponseUrl=${fetchedPdf?.responseUrl || "none"} bgResponseUrl=${bgFetchedPdf?.responseUrl || "none"})`
+              );
+            }
+          }
+        } else {
+          emitEvent(
+            FlowState.DOWNLOAD_OR_SELECT_BILL,
+            FlowStatus.STARTED,
+            "Free PDF source URL is missing; manual upload fallback remains available"
+          );
+        }
+      }
+
       flowContext.documentPayload = captureData?.dataUrl
         ? {
           ...result.document,
@@ -522,7 +583,14 @@ async function runStep(state) {
           mimeType: captureData.mimeType || result.document.mimeType || "application/pdf",
           manualUploadRequired: false
         }
-        : result.document;
+        : freeCaptureData?.dataUrl
+          ? {
+            ...result.document,
+            dataUrl: freeCaptureData.dataUrl,
+            mimeType: freeCaptureData.mimeType || result.document.mimeType || "application/pdf",
+            manualUploadRequired: false
+          }
+          : result.document;
       return;
     }
     case FlowState.OPEN_NAVAN:
@@ -564,8 +632,19 @@ async function runStep(state) {
         emitEvent(
           FlowState.UPLOAD_DOCUMENT,
           FlowStatus.STARTED,
-          `Navan upload result (uploaded=${Boolean(uploadResult?.uploaded)} manual=${Boolean(uploadResult?.manualUploadRequired)} reason=${uploadResult?.reason || "none"} file=${uploadResult?.attachedFileName || "none"} debug=${JSON.stringify(uploadResult?.debug || {})})`
+          `Navan upload result (uploaded=${Boolean(uploadResult?.uploaded)} manual=${Boolean(uploadResult?.manualUploadRequired)} reason=${uploadResult?.reason || "none"} file=${uploadResult?.attachedFileName || "none"} modalCleared=${uploadResult?.debug?.modalCleared === undefined ? "n/a" : Boolean(uploadResult?.debug?.modalCleared)} modalStillVisible=${uploadResult?.debug?.modalStillVisible === undefined ? "n/a" : Boolean(uploadResult?.debug?.modalStillVisible)} nudges=${Number(uploadResult?.debug?.dismissNudgeCount || 0)} expenseSelected=${Boolean(uploadResult?.expenseTypeSelected)} expTypedOnly=${uploadResult?.debug?.expenseTypeDebug?.typedOnly === undefined ? "n/a" : Boolean(uploadResult?.debug?.expenseTypeDebug?.typedOnly)} expManualOption=${uploadResult?.debug?.expenseTypeDebug?.manualOptionClickRequired === undefined ? "n/a" : Boolean(uploadResult?.debug?.expenseTypeDebug?.manualOptionClickRequired)} expFinal=${uploadResult?.debug?.expenseTypeDebug?.finalValue || "none"})`
         );
+        const modalStillVisible = Boolean(uploadResult?.debug?.modalStillVisible);
+        if (modalStillVisible) {
+          flowContext.waitingForUser = true;
+          flowContext.waitingReason = "NAVAN_MODAL_STUCK";
+          emitEvent(
+            FlowState.UPLOAD_DOCUMENT,
+            FlowStatus.WAITING_USER,
+            "Navan is still showing the processing modal. Dismiss it in Navan, then click Resume."
+          );
+          return;
+        }
         if (uploadResult?.manualUploadRequired) {
           flowContext.waitingForUser = true;
           flowContext.waitingReason = "NAVAN_MANUAL_UPLOAD";
@@ -1425,7 +1504,7 @@ function startProviderLoginWatcher() {
       flowContext.waitingForUser = false;
       flowContext.waitingReason = null;
       stopProviderLoginWatcher();
-      emitEvent(FlowState.AUTH_ORANGE, FlowStatus.SUCCESS, "Provider billing page detected (Vos factures). Continuing flow.");
+      emitEvent(FlowState.AUTH_PROVIDER, FlowStatus.SUCCESS, "Provider billing page detected (Vos factures). Continuing flow.");
       runStateMachine(runId).catch((error) => failFlow(error, runId));
     } catch (_error) {
       // keep polling
