@@ -431,8 +431,9 @@ async function runStep(state) {
         FlowStatus.STARTED,
         `Provider action DOWNLOAD_AND_EXTRACT_BILL (provider=${flowContext.runConfig.Provider}, timeout=${TIMEOUTS_MS.LONG}ms)`
       );
-      const isOrangeProvider = flowContext.runConfig.Provider === "orange_provider";
-      const isFreeProvider = flowContext.runConfig.Provider === "free_provider";
+      const providerId = normalizeProviderId(flowContext.runConfig.Provider);
+      const isOrangeProvider = providerId === "orange_provider";
+      const isFreeProvider = providerId === "free_provider";
       const shouldCaptureOrangePdf = isOrangeProvider;
       const debuggerCapture = shouldCaptureOrangePdf
         ? await startOrangePdfNetworkCapture(flowContext.orangeTabId)
@@ -456,6 +457,9 @@ async function runStep(state) {
         FlowStatus.STARTED,
         `Provider action DOWNLOAD_AND_EXTRACT_BILL completed (hasDocument=${Boolean(result?.document)} sourceUrl=${result?.document?.sourceUrl || "none"})`
       );
+      const sourceUrl = String(result?.document?.sourceUrl || "").trim();
+      const redSourceHostMatch = /https?:\/\/(?:[^/]+\.)?espace-client-red\.sfr\.fr\//i.test(sourceUrl);
+      const isRedBySfrProvider = providerId === "redbysfr_provider" || redSourceHostMatch;
       if (result?.diagnostics) {
         const d = result.diagnostics;
         emitEvent(
@@ -576,6 +580,62 @@ async function runStep(state) {
         }
       }
 
+      let redCaptureData = null;
+      if (isRedBySfrProvider) {
+        const redPdfUrl = sourceUrl;
+        emitEvent(
+          FlowState.DOWNLOAD_OR_SELECT_BILL,
+          FlowStatus.STARTED,
+          `RED by SFR PDF byte capture started (sourceUrl=${redPdfUrl || "none"})`
+        );
+        if (redPdfUrl) {
+          const fetchedPdf = await fetchPdfDataUrlInTab(flowContext.orangeTabId, redPdfUrl, TIMEOUTS_MS.LONG);
+          if (fetchedPdf?.ok && fetchedPdf?.dataUrl) {
+            redCaptureData = {
+              dataUrl: fetchedPdf.dataUrl,
+              mimeType: fetchedPdf.mimeType || "application/pdf",
+              responseUrl: fetchedPdf.responseUrl || redPdfUrl
+            };
+            emitEvent(
+              FlowState.DOWNLOAD_OR_SELECT_BILL,
+              FlowStatus.STARTED,
+              `Fetched RED by SFR PDF bytes in page context (responseUrl=${redCaptureData.responseUrl || "none"})`
+            );
+          } else {
+            emitEvent(
+              FlowState.DOWNLOAD_OR_SELECT_BILL,
+              FlowStatus.STARTED,
+              `RED by SFR page-context PDF fetch failed (error=${fetchedPdf?.error || "unknown"} mime=${fetchedPdf?.mimeType || "none"} responseUrl=${fetchedPdf?.responseUrl || "none"})`
+            );
+            const bgFetchedPdf = await fetchPdfDataUrlInBackground(redPdfUrl, TIMEOUTS_MS.LONG);
+            if (bgFetchedPdf?.ok && bgFetchedPdf?.dataUrl) {
+              redCaptureData = {
+                dataUrl: bgFetchedPdf.dataUrl,
+                mimeType: bgFetchedPdf.mimeType || "application/pdf",
+                responseUrl: bgFetchedPdf.responseUrl || redPdfUrl
+              };
+              emitEvent(
+                FlowState.DOWNLOAD_OR_SELECT_BILL,
+                FlowStatus.STARTED,
+                `Fetched RED by SFR PDF bytes in background context (responseUrl=${redCaptureData.responseUrl || "none"})`
+              );
+            } else {
+              emitEvent(
+                FlowState.DOWNLOAD_OR_SELECT_BILL,
+                FlowStatus.STARTED,
+                `RED by SFR PDF fetch failed in both contexts (pageError=${fetchedPdf?.error || "unknown"} bgError=${bgFetchedPdf?.error || "unknown"} pageMime=${fetchedPdf?.mimeType || "none"} bgMime=${bgFetchedPdf?.mimeType || "none"} pageResponseUrl=${fetchedPdf?.responseUrl || "none"} bgResponseUrl=${bgFetchedPdf?.responseUrl || "none"})`
+              );
+            }
+          }
+        } else {
+          emitEvent(
+            FlowState.DOWNLOAD_OR_SELECT_BILL,
+            FlowStatus.STARTED,
+            "RED by SFR PDF source URL is missing; manual upload fallback remains available"
+          );
+        }
+      }
+
       flowContext.documentPayload = captureData?.dataUrl
         ? {
           ...result.document,
@@ -583,6 +643,13 @@ async function runStep(state) {
           mimeType: captureData.mimeType || result.document.mimeType || "application/pdf",
           manualUploadRequired: false
         }
+        : redCaptureData?.dataUrl
+          ? {
+            ...result.document,
+            dataUrl: redCaptureData.dataUrl,
+            mimeType: redCaptureData.mimeType || result.document.mimeType || "application/pdf",
+            manualUploadRequired: false
+          }
         : freeCaptureData?.dataUrl
           ? {
             ...result.document,
