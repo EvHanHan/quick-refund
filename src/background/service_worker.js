@@ -437,6 +437,7 @@ async function runStep(state) {
       const isSoshProvider = providerId === "sosh_provider";
       const isNavigoProvider = providerId === "navigo_provider";
       const isFreeProvider = providerId === "free_provider";
+      const isFreeMobileProvider = providerId === "free_mobile_provider";
       const shouldCaptureOrangePdf = isOrangeProvider || isSoshProvider;
       const shouldCaptureNavigoPdf = isNavigoProvider;
       const debuggerCapture = shouldCaptureOrangePdf
@@ -585,6 +586,62 @@ async function runStep(state) {
             FlowState.DOWNLOAD_OR_SELECT_BILL,
             FlowStatus.STARTED,
             "Free PDF source URL is missing; manual upload fallback remains available"
+          );
+        }
+      }
+
+      let freeMobileCaptureData = null;
+      if (isFreeMobileProvider) {
+        const freeMobilePdfUrl = sourceUrl;
+        emitEvent(
+          FlowState.DOWNLOAD_OR_SELECT_BILL,
+          FlowStatus.STARTED,
+          `Free Mobile PDF byte capture started (sourceUrl=${freeMobilePdfUrl || "none"})`
+        );
+        if (freeMobilePdfUrl) {
+          const fetchedPdf = await fetchPdfDataUrlInTab(flowContext.orangeTabId, freeMobilePdfUrl, TIMEOUTS_MS.LONG);
+          if (fetchedPdf?.ok && fetchedPdf?.dataUrl) {
+            freeMobileCaptureData = {
+              dataUrl: fetchedPdf.dataUrl,
+              mimeType: fetchedPdf.mimeType || "application/pdf",
+              responseUrl: fetchedPdf.responseUrl || freeMobilePdfUrl
+            };
+            emitEvent(
+              FlowState.DOWNLOAD_OR_SELECT_BILL,
+              FlowStatus.STARTED,
+              `Fetched Free Mobile PDF bytes in page context (responseUrl=${freeMobileCaptureData.responseUrl || "none"})`
+            );
+          } else {
+            emitEvent(
+              FlowState.DOWNLOAD_OR_SELECT_BILL,
+              FlowStatus.STARTED,
+              `Free Mobile page-context PDF fetch failed (error=${fetchedPdf?.error || "unknown"} mime=${fetchedPdf?.mimeType || "none"} responseUrl=${fetchedPdf?.responseUrl || "none"})`
+            );
+            const bgFetchedPdf = await fetchPdfDataUrlInBackground(freeMobilePdfUrl, TIMEOUTS_MS.LONG);
+            if (bgFetchedPdf?.ok && bgFetchedPdf?.dataUrl) {
+              freeMobileCaptureData = {
+                dataUrl: bgFetchedPdf.dataUrl,
+                mimeType: bgFetchedPdf.mimeType || "application/pdf",
+                responseUrl: bgFetchedPdf.responseUrl || freeMobilePdfUrl
+              };
+              emitEvent(
+                FlowState.DOWNLOAD_OR_SELECT_BILL,
+                FlowStatus.STARTED,
+                `Fetched Free Mobile PDF bytes in background context (responseUrl=${freeMobileCaptureData.responseUrl || "none"})`
+              );
+            } else {
+              emitEvent(
+                FlowState.DOWNLOAD_OR_SELECT_BILL,
+                FlowStatus.STARTED,
+                `Free Mobile PDF fetch failed in both contexts (pageError=${fetchedPdf?.error || "unknown"} bgError=${bgFetchedPdf?.error || "unknown"} pageMime=${fetchedPdf?.mimeType || "none"} bgMime=${bgFetchedPdf?.mimeType || "none"} pageResponseUrl=${fetchedPdf?.responseUrl || "none"} bgResponseUrl=${bgFetchedPdf?.responseUrl || "none"})`
+              );
+            }
+          }
+        } else {
+          emitEvent(
+            FlowState.DOWNLOAD_OR_SELECT_BILL,
+            FlowStatus.STARTED,
+            "Free Mobile PDF source URL is missing; manual upload fallback remains available"
           );
         }
       }
@@ -783,6 +840,13 @@ async function runStep(state) {
             ...result.document,
             dataUrl: navigoCaptureData.dataUrl,
             mimeType: navigoCaptureData.mimeType || result.document.mimeType || "application/pdf",
+            manualUploadRequired: false
+          }
+        : freeMobileCaptureData?.dataUrl
+          ? {
+            ...result.document,
+            dataUrl: freeMobileCaptureData.dataUrl,
+            mimeType: freeMobileCaptureData.mimeType || result.document.mimeType || "application/pdf",
             manualUploadRequired: false
           }
         : freeCaptureData?.dataUrl
