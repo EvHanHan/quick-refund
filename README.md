@@ -1,8 +1,12 @@
 # 1-click Navan refund chrome extension 
 <img width="413" height="322" alt="SCR-20260316-qjio" src="https://github.com/user-attachments/assets/4cb77d07-ae3c-4ae9-9202-7d52f30b33e4" />
 
-# Download
-Download the latest release [here](https://github.com/EvHanHan/quick-refund/releases/).
+# Setup 
+1. Download the latest release [here](https://github.com/EvHanHan/quick-refund/releases/).
+2. Unzip it 
+3. Go to your chrome extension page and enable developer mode.
+4. Click on the "Load unpacked" button and choose the unziped folder
+5. That's it. Now get your money back with 1 click. 
 
 
 # How to use? 
