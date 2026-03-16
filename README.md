@@ -1,15 +1,11 @@
 # 1-click Navan refund chrome extension 
 <img width="413" height="322" alt="SCR-20260316-qjio" src="https://github.com/user-attachments/assets/4cb77d07-ae3c-4ae9-9202-7d52f30b33e4" />
 
-# What does user say
-<img width="608" height="152" alt="image" src="https://github.com/user-attachments/assets/e42d33b1-e775-44fa-b536-67b727390963" />
-<img width="985" height="85" alt="image" src="https://github.com/user-attachments/assets/cc788ad9-717e-4bfd-8ff9-0363b08c3d1e" />
+# Download
+Download the latest release [here](https://github.com/EvHanHan/quick-refund/releases/).
 
-## Setup
-Download the latest release here: https://github.com/EvHanHan/quick-refund/releases
-This will help us track the number of downloads. 
 
-## How to use? 
+# How to use? 
 Video demo: 
 https://youtu.be/dusQxY_aq6s
 
@@ -19,5 +15,10 @@ https://youtu.be/dusQxY_aq6s
 4. The flow resumes automatically after provider login is detected.
 
 
-## Note
+# What does user say
+<img width="608" height="152" alt="image" src="https://github.com/user-attachments/assets/e42d33b1-e775-44fa-b536-67b727390963" />
+<img width="992" height="84" alt="image" src="https://github.com/user-attachments/assets/d5127f16-5893-4b11-a353-791589e6ea11" />
+
+
+# Note
 [Product story – the why?](https://github.com/EvHanHan/quick-refund/wiki/Product-story-%E2%80%90-the-why%3F)
