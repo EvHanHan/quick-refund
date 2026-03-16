@@ -10,8 +10,7 @@
 
 
 # How to use? 
-Video demo: 
-https://youtu.be/dusQxY_aq6s
+[Video demo](https://youtu.be/dusQxY_aq6s/).
 
 1. Open the extension
 2. Choose your provider and billing type, then click **Start Flow**.
