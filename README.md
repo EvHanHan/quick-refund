@@ -22,6 +22,8 @@
 <img width="608" height="152" alt="image" src="https://github.com/user-attachments/assets/e42d33b1-e775-44fa-b536-67b727390963" />
 <img width="992" height="84" alt="image" src="https://github.com/user-attachments/assets/d5127f16-5893-4b11-a353-791589e6ea11" />
 
+# Privacy
+[Privacy Policy](https://evhanhan.github.io/quick-refund/privacy-policy.html)
 
 # Note
 [Product story – the why?](https://github.com/EvHanHan/quick-refund/wiki/Product-story-%E2%80%90-the-why%3F)
