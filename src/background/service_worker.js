@@ -24,9 +24,11 @@ const UPDATE_STATUS_KEY = "manifest_update_status_v1";
 const REPO_MANIFEST_URL = "https://raw.githubusercontent.com/MrCerise/dataiku-navan/main/manifest.json";
 const UPLOAD_ACTION_TIMEOUT_MS = 120_000;
 const ORANGE_PDF_CAPTURE_TIMEOUT_MS = 20_000;
+const BOUYGUES_DEBUGGER_CAPTURE_TIMEOUT_MS = 800;
 const DEBUGGER_PROTOCOL_VERSION = "1.3";
 const ORANGE_PDF_FETCH_URL_PATTERN = "*://espace-client.orange.fr/ecd_wp/facture/v1.0/pdf*";
 const NAVIGO_PDF_FETCH_URL_PATTERN = "*://*.iledefrance-mobilites.fr/*";
+const BOUYGUES_PDF_FETCH_URL_PATTERN = "*://*.bouyguestelecom.fr/*";
 const PROVIDER_CONFIGS = {
   orange_provider: {
     loginUrl: "https://espace-client.orange.fr/selectionner-un-contrat?returnUrl=%2Ffacture-paiement%2F%257B%257Bcid%257D%257D&marketType=RES",
@@ -313,13 +315,6 @@ async function runStep(state) {
           FlowStatus.STARTED,
           `Provider action CHECK_PROVIDER_SESSION completed (authenticated=${Boolean(session?.authenticated)})`
         );
-        if (flowContext.runConfig.Provider === "bouygues_provider" && session?.diagnostics) {
-          emitEvent(
-            FlowState.AUTH_PROVIDER,
-            FlowStatus.STARTED,
-            `Bouygues session diagnostics: ${formatBouyguesDiagnostics(session.diagnostics)}`
-          );
-        }
         if (flowContext.runConfig.Provider === "free_mobile_provider" && session?.diagnostics) {
           emitEvent(
             FlowState.AUTH_PROVIDER,
@@ -350,13 +345,6 @@ async function runStep(state) {
           FlowStatus.STARTED,
           `Provider action AUTH_PROVIDER completed (authenticated=${Boolean(authResult?.authenticated)} manual=${Boolean(authResult?.manualLoginRequired)} captcha=${Boolean(authResult?.captchaRequired)})`
         );
-        if (flowContext.runConfig.Provider === "bouygues_provider" && authResult?.diagnostics) {
-          emitEvent(
-            FlowState.AUTH_PROVIDER,
-            FlowStatus.STARTED,
-            `Bouygues auth diagnostics: ${formatBouyguesDiagnostics(authResult.diagnostics)}`
-          );
-        }
         if (flowContext.runConfig.Provider === "free_mobile_provider") {
           emitEvent(
             FlowState.AUTH_PROVIDER,
@@ -410,13 +398,6 @@ async function runStep(state) {
           FlowStatus.STARTED,
           `Provider action NAVIGATE_BILLING completed (navigated=${Boolean(navigation?.navigated)} detailUrl=${navigation?.detailUrl || "none"})`
         );
-        if (flowContext.runConfig.Provider === "bouygues_provider" && navigation?.diagnostics) {
-          emitEvent(
-            FlowState.NAVIGATE_PROVIDER_BILLING,
-            FlowStatus.STARTED,
-            `Bouygues navigation diagnostics: ${formatBouyguesDiagnostics(navigation.diagnostics)}`
-          );
-        }
         if (!navigation?.detailUrl) {
           throw new FlowError(ErrorCode.ORANGE_BILL_NOT_FOUND, "Could not resolve provider bill detail URL");
         }
@@ -462,10 +443,13 @@ async function runStep(state) {
       const isBouyguesProvider = providerId === "bouygues_provider";
       const shouldCaptureOrangePdf = isOrangeProvider || isSoshProvider;
       const shouldCaptureNavigoPdf = isNavigoProvider;
+      const shouldCaptureBouyguesPdf = isBouyguesProvider;
       const debuggerCapture = shouldCaptureOrangePdf
         ? await startOrangePdfNetworkCapture(flowContext.orangeTabId)
         : shouldCaptureNavigoPdf
           ? await startNavigoPdfNetworkCapture(flowContext.orangeTabId)
+          : shouldCaptureBouyguesPdf
+            ? await startBouyguesPdfNetworkCapture(flowContext.orangeTabId)
           : null;
       let result;
       let captureData = null;
@@ -475,7 +459,10 @@ async function runStep(state) {
           AccountType: flowContext.runConfig.AccountType
         }, TIMEOUTS_MS.LONG);
         if (debuggerCapture) {
-          captureData = await debuggerCapture.waitForDataUrl(ORANGE_PDF_CAPTURE_TIMEOUT_MS);
+          const debuggerWaitMs = shouldCaptureBouyguesPdf
+            ? BOUYGUES_DEBUGGER_CAPTURE_TIMEOUT_MS
+            : ORANGE_PDF_CAPTURE_TIMEOUT_MS;
+          captureData = await debuggerCapture.waitForDataUrl(debuggerWaitMs);
         }
       } finally {
         if (debuggerCapture) {
@@ -495,7 +482,7 @@ async function runStep(state) {
         emitEvent(
           FlowState.DOWNLOAD_OR_SELECT_BILL,
           FlowStatus.STARTED,
-          `Download diagnostics (controlMs=${d.downloadControlMs ?? "n/a"} urlMs=${d.downloadUrlMs ?? "n/a"} totalMs=${d.totalMs ?? "n/a"} onDetail=${Boolean(d.onDetailPage)} sourceUrl=${d.sourceUrl || "none"} rowCount=${d.rowCount ?? "n/a"} requestedType=${d.requestedType || "n/a"} selectedType=${d.selectedType || "n/a"} selectedLine=${d.selectedLine || "n/a"} rowIndex=${d.selectedRowIndex ?? "n/a"} fallbackRow=${d.fallbackRowUsed === undefined ? "n/a" : Boolean(d.fallbackRowUsed)} action=${d.selectedAction || "n/a"} actionHref=${d.selectedActionHref || "n/a"})`
+          `Download diagnostics (controlMs=${d.downloadControlMs ?? "n/a"} urlMs=${d.downloadUrlMs ?? "n/a"} totalMs=${d.totalMs ?? "n/a"} onDetail=${Boolean(d.onDetailPage)} sourceUrl=${d.sourceUrl || "none"})`
         );
       }
       if (!result?.document) {
@@ -503,10 +490,16 @@ async function runStep(state) {
       }
       if (debuggerCapture) {
         if (captureData?.pdfUrl && !captureData?.dataUrl) {
-          const captureFamily = shouldCaptureNavigoPdf ? "Navigo" : "Orange";
+          const captureFamily = shouldCaptureNavigoPdf
+            ? "Navigo"
+            : shouldCaptureBouyguesPdf
+              ? "Bouygues"
+              : "Orange";
           const preferredPdfUrl = shouldCaptureNavigoPdf
             ? selectPreferredNavigoPdfUrl(captureData)
-            : selectPreferredOrangePdfUrl(captureData);
+            : shouldCaptureBouyguesPdf
+              ? selectPreferredBouyguesPdfUrl(captureData)
+              : selectPreferredOrangePdfUrl(captureData);
           const originalPdfUrl = captureData.pdfUrl;
           captureData.pdfUrl = preferredPdfUrl || captureData.pdfUrl;
           emitEvent(
@@ -552,8 +545,8 @@ async function runStep(state) {
           FlowState.DOWNLOAD_OR_SELECT_BILL,
           FlowStatus.STARTED,
           captureData?.dataUrl
-            ? `Captured ${shouldCaptureNavigoPdf ? "Navigo" : "Orange"} PDF body via debugger (requestId=${captureData.requestId || "n/a"})`
-            : `Debugger capture did not return ${shouldCaptureNavigoPdf ? "Navigo" : "Orange"} PDF bytes; manual upload fallback remains available (candidates=${(captureData?.candidates || []).join(" || ") || "none"})`
+            ? `Captured ${shouldCaptureNavigoPdf ? "Navigo" : shouldCaptureBouyguesPdf ? "Bouygues" : "Orange"} PDF body via debugger (requestId=${captureData.requestId || "n/a"})`
+            : `Debugger capture did not return ${shouldCaptureNavigoPdf ? "Navigo" : shouldCaptureBouyguesPdf ? "Bouygues" : "Orange"} PDF bytes; manual upload fallback remains available (candidates=${(captureData?.candidates || []).join(" || ") || "none"})`
         );
       }
 
@@ -1494,6 +1487,215 @@ async function startNavigoPdfNetworkCapture(tabId) {
   };
 }
 
+async function startBouyguesPdfNetworkCapture(tabId) {
+  const target = { tabId };
+  let attached = false;
+  let fetchEnabled = false;
+  let settled = false;
+  let disposed = false;
+  let fallbackCapture = null;
+  let latestPdfCandidateUrl = null;
+  const watchedRequests = new Map();
+  const processedRequestIds = new Set();
+  const recentCandidates = [];
+  let resolveCapture;
+  const capturePromise = new Promise((resolve) => {
+    resolveCapture = resolve;
+  });
+
+  const settleCapture = (value) => {
+    if (settled) return;
+    settled = true;
+    resolveCapture(value || null);
+  };
+
+  const onEvent = (source, method, params) => {
+    if (disposed) return;
+    if (source?.tabId !== tabId) return;
+    if (method === "Fetch.requestPaused") {
+      void handleFetchRequestPaused(params);
+      return;
+    }
+    if (method === "Network.responseReceived") {
+      const requestId = params?.requestId;
+      const response = params?.response;
+      if (!requestId || !isLikelyBouyguesCaptureResponse(response)) return;
+      const url = String(response?.url || "");
+      const mimeType = String(response?.mimeType || "");
+      const status = Number(response?.status || 0);
+      const contentType = String(response?.headers?.["content-type"] || response?.headers?.["Content-Type"] || "");
+      const contentDisposition = String(response?.headers?.["content-disposition"] || response?.headers?.["Content-Disposition"] || "");
+      watchedRequests.set(requestId, {
+        url,
+        mimeType,
+        status,
+        contentType,
+        contentDisposition
+      });
+      if (isLikelyBouyguesPdfDownloadUrl(url) || /pdf/i.test(mimeType) || /pdf/i.test(contentType) || /pdf/i.test(contentDisposition)) {
+        latestPdfCandidateUrl = url;
+        if (!processedRequestIds.has(requestId)) {
+          processedRequestIds.add(requestId);
+          void attemptReadResponseBodyWithRetry(target, requestId, watchedRequests.get(requestId), 10, 150).then((capture) => {
+            if (capture?.dataUrl) {
+              settleCapture(capture);
+              return;
+            }
+            if (capture?.pdfUrl) {
+              fallbackCapture = capture;
+            }
+          });
+        }
+      }
+      recentCandidates.push(`${status || "n/a"} ${mimeType || contentType || "unknown"} ${url}`);
+      if (recentCandidates.length > 12) recentCandidates.shift();
+      return;
+    }
+    if (method === "Network.loadingFailed") {
+      watchedRequests.delete(params?.requestId);
+      return;
+    }
+    if (method !== "Network.loadingFinished") return;
+    const requestId = params?.requestId;
+    const meta = watchedRequests.get(requestId);
+    if (!requestId || !meta || settled) return;
+    if (processedRequestIds.has(requestId)) return;
+    processedRequestIds.add(requestId);
+    void readDebuggerResponseBody(target, requestId, meta).then((capture) => {
+      watchedRequests.delete(requestId);
+      if (capture?.dataUrl) {
+        settleCapture(capture);
+        return;
+      }
+      if (capture?.pdfUrl) {
+        fallbackCapture = capture;
+      }
+    });
+  };
+
+  async function handleFetchRequestPaused(params) {
+    const fetchRequestId = params?.requestId;
+    const url = String(params?.request?.url || "");
+    const responseStatusCode = Number(params?.responseStatusCode || 0);
+    const headers = headersArrayToObject(params?.responseHeaders);
+    const contentType = readHeader(headers, "content-type");
+    const contentDisposition = readHeader(headers, "content-disposition");
+
+    if (!fetchRequestId) return;
+    try {
+      if (!isLikelyBouyguesPdfDownloadUrl(url)) return;
+      recentCandidates.push(`${responseStatusCode || "n/a"} ${contentType || "unknown"} ${url}`);
+      if (recentCandidates.length > 12) recentCandidates.shift();
+
+      const body = await chrome.debugger.sendCommand(target, "Fetch.getResponseBody", { requestId: fetchRequestId });
+      if (!body?.body) return;
+
+      let base64 = null;
+      if (body.base64Encoded) {
+        base64 = body.body;
+      } else if (String(body.body || "").startsWith("%PDF-")) {
+        base64 = btoa(body.body);
+      }
+      if (!base64) return;
+      if (!isBase64PdfBody(base64) && !/pdf/i.test(contentType) && !/pdf/i.test(contentDisposition)) return;
+      settleCapture({
+        requestId: fetchRequestId,
+        mimeType: "application/pdf",
+        dataUrl: `data:application/pdf;base64,${base64}`
+      });
+    } catch (error) {
+      fallbackCapture = {
+        pdfUrl: url,
+        debug: {
+          stage: "fetch_domain_get_response_body_error",
+          error: String(error?.message || error || "unknown_error"),
+          contentType,
+          contentDisposition
+        }
+      };
+    } finally {
+      await continueFetchRequest(target, fetchRequestId);
+    }
+  }
+
+  const onDetach = (source) => {
+    if (source?.tabId !== tabId) return;
+    settleCapture(null);
+  };
+
+  try {
+    await chrome.debugger.attach(target, DEBUGGER_PROTOCOL_VERSION);
+    attached = true;
+    chrome.debugger.onEvent.addListener(onEvent);
+    chrome.debugger.onDetach.addListener(onDetach);
+    await chrome.debugger.sendCommand(target, "Network.enable");
+    await chrome.debugger.sendCommand(target, "Fetch.enable", {
+      patterns: [{ urlPattern: BOUYGUES_PDF_FETCH_URL_PATTERN, requestStage: "Response" }]
+    });
+    fetchEnabled = true;
+  } catch (error) {
+    if (attached) {
+      try {
+        await chrome.debugger.detach(target);
+      } catch (_detachError) {
+        // Ignore detach failure.
+      }
+    }
+    emitEvent(
+      FlowState.DOWNLOAD_OR_SELECT_BILL,
+      FlowStatus.STARTED,
+      `Debugger capture unavailable (${error?.message || "unknown error"})`
+    );
+    return {
+      waitForDataUrl: async () => null,
+      dispose: async () => {}
+    };
+  }
+
+  return {
+    waitForDataUrl: async (timeoutMs) => {
+      const timeoutPromise = sleep(timeoutMs).then(() => null);
+      const directCapture = await Promise.race([capturePromise, timeoutPromise]);
+      if (directCapture?.dataUrl) return directCapture;
+      if (fallbackCapture) {
+        return {
+          ...fallbackCapture,
+          candidates: recentCandidates.slice(-8)
+        };
+      }
+      if (latestPdfCandidateUrl) {
+        return {
+          pdfUrl: latestPdfCandidateUrl,
+          debug: { stage: "latest_pdf_candidate_url" },
+          candidates: recentCandidates.slice(-8)
+        };
+      }
+      return { candidates: recentCandidates.slice(-8) };
+    },
+    dispose: async () => {
+      if (disposed) return;
+      disposed = true;
+      chrome.debugger.onEvent.removeListener(onEvent);
+      chrome.debugger.onDetach.removeListener(onDetach);
+      settleCapture(null);
+      if (!attached) return;
+      try {
+        if (fetchEnabled) {
+          await chrome.debugger.sendCommand(target, "Fetch.disable");
+        }
+        await chrome.debugger.sendCommand(target, "Network.disable");
+      } catch (_error) {
+        // Ignore disable failure.
+      }
+      try {
+        await chrome.debugger.detach(target);
+      } catch (_error) {
+        // Ignore detach failure.
+      }
+    }
+  };
+}
+
 async function readDebuggerResponseBody(target, requestId, meta) {
   const mimeType = String(meta?.mimeType || "");
   const contentType = String(meta?.contentType || "");
@@ -1609,8 +1811,22 @@ function isLikelyNavigoCaptureResponse(response) {
     || /attestation|prelev|certificate|download/i.test(url);
 }
 
+function isLikelyBouyguesCaptureResponse(response) {
+  const url = String(response?.url || "");
+  if (!url || isIgnoredCaptureUrl(url)) return false;
+  const mimeType = String(response?.mimeType || "");
+  const headerContentType = String(response?.headers?.["content-type"] || response?.headers?.["Content-Type"] || "");
+  const contentDisposition = String(response?.headers?.["content-disposition"] || response?.headers?.["Content-Disposition"] || "");
+  if (/pdf/i.test(mimeType) || /pdf/i.test(headerContentType) || /pdf/i.test(contentDisposition)) return true;
+  if (!isLikelyBouyguesInvoiceUrl(url)) return false;
+  return /json|octet-stream|text/i.test(mimeType)
+    || /pdf|json/i.test(headerContentType)
+    || /\.pdf(\?|#|$)/i.test(url)
+    || /telecharg|facture|invoice|bill/i.test(url);
+}
+
 function isIgnoredCaptureUrl(url) {
-  return /doubleclick|googletagmanager|google-analytics|tagmanager|kameleoon|_pdb\.gif/i.test(String(url || ""));
+  return /doubleclick|googletagmanager|google-analytics|tagmanager|kameleoon|_pdb\.gif|mediarithmics|pinterest|creativecdn/i.test(String(url || ""));
 }
 
 function isLikelyOrangeInvoiceUrl(url) {
@@ -1637,6 +1853,21 @@ function isLikelyNavigoInvoiceUrl(url) {
   if (!host.includes("iledefrance-mobilites.fr")) return false;
   const signal = `${parsed.pathname || ""} ${parsed.search || ""}`.toLowerCase();
   return /attestation|prelev|certificate|pdf|download|justificatif/.test(signal);
+}
+
+function isLikelyBouyguesInvoiceUrl(url) {
+  let parsed = null;
+  try {
+    parsed = new URL(url);
+  } catch (_error) {
+    return false;
+  }
+  const host = String(parsed.hostname || "");
+  if (!host.includes("bouyguestelecom.fr") && !host.includes("thunderhead.com")) return false;
+  const signal = `${parsed.pathname || ""} ${parsed.search || ""}`.toLowerCase();
+  if (/\/static\/odr\/|coupon|byou_clients_box|\/s\/article\//.test(signal)) return false;
+  if (/assets\/aco|\.js(\?|#|$)|\.css(\?|#|$)|\.map(\?|#|$)/.test(signal)) return false;
+  return /facture|invoice|bill|telecharg|pdf/.test(signal);
 }
 
 function decodeBase64Safe(input) {
@@ -1727,8 +1958,10 @@ function normalizePdfCandidateUrl(candidate, baseUrl) {
   try {
     const parsed = new URL(raw, baseUrl || undefined);
     const normalized = parsed.toString();
-    if (!isLikelyOrangeInvoiceUrl(normalized)) return null;
-    if (!isLikelyOrangePdfDownloadUrl(normalized)) return null;
+    const isOrange = isLikelyOrangeInvoiceUrl(normalized) && isLikelyOrangePdfDownloadUrl(normalized);
+    const isNavigo = isLikelyNavigoInvoiceUrl(normalized) && isLikelyNavigoPdfDownloadUrl(normalized);
+    const isBouygues = isLikelyBouyguesInvoiceUrl(normalized) && isLikelyBouyguesPdfDownloadUrl(normalized);
+    if (!isOrange && !isNavigo && !isBouygues) return null;
     return normalized;
   } catch (_error) {
     return null;
@@ -1761,6 +1994,22 @@ function isLikelyNavigoPdfDownloadUrl(url) {
   if (/\.pdf(\?|#|$)/i.test(url)) return true;
   if (!parsed.hostname.includes("iledefrance-mobilites.fr")) return false;
   return /attestation|prelev|certificate|download|justificatif|period=|documentid=|id=/.test(signal);
+}
+
+function isLikelyBouyguesPdfDownloadUrl(url) {
+  let parsed = null;
+  try {
+    parsed = new URL(url);
+  } catch (_error) {
+    return false;
+  }
+  const host = String(parsed.hostname || "");
+  if (!host.includes("bouyguestelecom.fr") && !host.includes("thunderhead.com")) return false;
+  const signal = `${parsed.pathname || ""} ${parsed.search || ""}`.toLowerCase();
+  if (/\/static\/odr\/|coupon|byou_clients_box|\/s\/article\//.test(signal)) return false;
+  if (/assets\/aco|\.js(\?|#|$)|\.css(\?|#|$)|\.map(\?|#|$)/.test(signal)) return false;
+  if (/\.pdf(\?|#|$)/i.test(url)) return true;
+  return /telechargement_facture|telecharg|facture|invoice|bill|pdf/.test(signal);
 }
 
 function selectPreferredOrangePdfUrl(captureData) {
@@ -1803,6 +2052,27 @@ function selectPreferredNavigoPdfUrl(captureData) {
 
   if (fromCandidates.length) return fromCandidates[0].url;
   return isLikelyNavigoPdfDownloadUrl(direct) ? direct : null;
+}
+
+function selectPreferredBouyguesPdfUrl(captureData) {
+  const direct = String(captureData?.pdfUrl || "");
+  const candidates = Array.isArray(captureData?.candidates) ? captureData.candidates : [];
+
+  const fromCandidates = candidates
+    .map((entry) => String(entry || ""))
+    .map((entry) => {
+      const match = entry.match(/\bhttps?:\/\/\S+$/i);
+      if (!match?.[0]) return null;
+      const url = match[0];
+      const isPdfMime = /\bapplication\/pdf\b/i.test(entry);
+      return { url, isPdfMime };
+    })
+    .filter(Boolean)
+    .filter((item) => isLikelyBouyguesPdfDownloadUrl(item.url))
+    .sort((a, b) => Number(b.isPdfMime) - Number(a.isPdfMime));
+
+  if (fromCandidates.length) return fromCandidates[0].url;
+  return isLikelyBouyguesPdfDownloadUrl(direct) ? direct : null;
 }
 
 async function fetchPdfDataUrlInTab(tabId, url, timeoutMs = TIMEOUTS_MS.LONG) {
@@ -2122,13 +2392,6 @@ function startProviderLoginWatcher() {
         { Provider: flowContext.runConfig?.Provider },
         TIMEOUTS_MS.DEFAULT
       );
-      if (flowContext.runConfig?.Provider === "bouygues_provider") {
-        emitEvent(
-          FlowState.AUTH_PROVIDER,
-          FlowStatus.STARTED,
-          `Bouygues billing-ready poll: ready=${Boolean(ready?.ready)} ${formatBouyguesDiagnostics(ready?.diagnostics)}`
-        );
-      }
       if (!ready?.ready) return;
 
       flowContext.waitingForUser = false;
@@ -2507,20 +2770,5 @@ function formatFreeMobileDiagnostics(diagnostics) {
     `invoicesTab=${Boolean(d.hasInvoicesTab)}`,
     `invoicesPanel=${Boolean(d.hasInvoicesPanel)}`,
     `authGuess=${Boolean(d.authenticatedGuess)}`
-  ].join(" ");
-}
-
-function formatBouyguesDiagnostics(diagnostics) {
-  if (!diagnostics || typeof diagnostics !== "object") return "no diagnostics";
-  const d = diagnostics;
-  return [
-    `host=${String(d.host || "")}`,
-    `path=${String(d.path || "")}`,
-    `assistance=${Boolean(d.assistancePage)}`,
-    `loginFields=${Boolean(d.loginFields)}`,
-    `invoiceSignals=${Boolean(d.invoiceSignals)}`,
-    `onBillingPath=${Boolean(d.onBillingPath)}`,
-    `authGuess=${Boolean(d.authenticatedGuess)}`,
-    `resolution=${String(d.resolution || "none")}`
   ].join(" ");
 }
