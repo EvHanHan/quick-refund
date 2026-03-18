@@ -130,7 +130,35 @@
         }
       },
       sfr_provider: {},
-      bouygues_provider: {},
+      bouygues_provider: {
+        billing: {
+          invoiceRows: [
+            "table tbody tr",
+            ".table tbody tr",
+            "[class*='facture'] tbody tr"
+          ],
+          lineCell: [
+            "td:nth-child(3)",
+            "td[data-label*='LIGNE']",
+            "td[data-label*='Ligne']"
+          ],
+          rowDownloadLinks: [
+            "a[href*='telecharg']",
+            "a[href*='download']",
+            "a[href*='facture']"
+          ],
+          invoiceLinks: [
+            "a[href*='mes-factures']",
+            "a[href*='factures']",
+            "a[href*='facture']"
+          ],
+          downloadButton: [
+            "a[href*='telecharg']",
+            "a[href*='download']",
+            "a[href*='facture']"
+          ]
+        }
+      },
       free_provider: {
         login: {
           username: [

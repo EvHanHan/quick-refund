@@ -58,6 +58,7 @@
         "src/shared/selectors.js",
         "src/content/providers/registry.js",
         "src/content/providers/generic.js",
+        "src/content/providers/bouygues.js",
         "src/content/providers/orange_family.js",
         "src/content/providers/redbysfr.js",
         "src/content/providers/free.js",

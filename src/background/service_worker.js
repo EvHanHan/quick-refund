@@ -46,7 +46,7 @@ const PROVIDER_CONFIGS = {
   },
   bouygues_provider: {
     loginUrl: "https://www.bouyguestelecom.fr/mon-compte",
-    billingUrl: "https://www.bouyguestelecom.fr/mon-compte/factures"
+    billingUrl: "https://www.bouyguestelecom.fr/mon-compte/mes-factures"
   },
   free_provider: {
     loginUrl: "https://subscribe.free.fr/login/do_login.pl",
@@ -313,6 +313,13 @@ async function runStep(state) {
           FlowStatus.STARTED,
           `Provider action CHECK_PROVIDER_SESSION completed (authenticated=${Boolean(session?.authenticated)})`
         );
+        if (flowContext.runConfig.Provider === "bouygues_provider" && session?.diagnostics) {
+          emitEvent(
+            FlowState.AUTH_PROVIDER,
+            FlowStatus.STARTED,
+            `Bouygues session diagnostics: ${formatBouyguesDiagnostics(session.diagnostics)}`
+          );
+        }
         if (flowContext.runConfig.Provider === "free_mobile_provider" && session?.diagnostics) {
           emitEvent(
             FlowState.AUTH_PROVIDER,
@@ -343,6 +350,13 @@ async function runStep(state) {
           FlowStatus.STARTED,
           `Provider action AUTH_PROVIDER completed (authenticated=${Boolean(authResult?.authenticated)} manual=${Boolean(authResult?.manualLoginRequired)} captcha=${Boolean(authResult?.captchaRequired)})`
         );
+        if (flowContext.runConfig.Provider === "bouygues_provider" && authResult?.diagnostics) {
+          emitEvent(
+            FlowState.AUTH_PROVIDER,
+            FlowStatus.STARTED,
+            `Bouygues auth diagnostics: ${formatBouyguesDiagnostics(authResult.diagnostics)}`
+          );
+        }
         if (flowContext.runConfig.Provider === "free_mobile_provider") {
           emitEvent(
             FlowState.AUTH_PROVIDER,
@@ -396,6 +410,13 @@ async function runStep(state) {
           FlowStatus.STARTED,
           `Provider action NAVIGATE_BILLING completed (navigated=${Boolean(navigation?.navigated)} detailUrl=${navigation?.detailUrl || "none"})`
         );
+        if (flowContext.runConfig.Provider === "bouygues_provider" && navigation?.diagnostics) {
+          emitEvent(
+            FlowState.NAVIGATE_PROVIDER_BILLING,
+            FlowStatus.STARTED,
+            `Bouygues navigation diagnostics: ${formatBouyguesDiagnostics(navigation.diagnostics)}`
+          );
+        }
         if (!navigation?.detailUrl) {
           throw new FlowError(ErrorCode.ORANGE_BILL_NOT_FOUND, "Could not resolve provider bill detail URL");
         }
@@ -438,6 +459,7 @@ async function runStep(state) {
       const isNavigoProvider = providerId === "navigo_provider";
       const isFreeProvider = providerId === "free_provider";
       const isFreeMobileProvider = providerId === "free_mobile_provider";
+      const isBouyguesProvider = providerId === "bouygues_provider";
       const shouldCaptureOrangePdf = isOrangeProvider || isSoshProvider;
       const shouldCaptureNavigoPdf = isNavigoProvider;
       const debuggerCapture = shouldCaptureOrangePdf
@@ -449,7 +471,8 @@ async function runStep(state) {
       let captureData = null;
       try {
         result = await runProviderAction("DOWNLOAD_AND_EXTRACT_BILL", flowContext.orangeTabId, {
-          Provider: flowContext.runConfig.Provider
+          Provider: flowContext.runConfig.Provider,
+          AccountType: flowContext.runConfig.AccountType
         }, TIMEOUTS_MS.LONG);
         if (debuggerCapture) {
           captureData = await debuggerCapture.waitForDataUrl(ORANGE_PDF_CAPTURE_TIMEOUT_MS);
@@ -472,7 +495,7 @@ async function runStep(state) {
         emitEvent(
           FlowState.DOWNLOAD_OR_SELECT_BILL,
           FlowStatus.STARTED,
-          `Download diagnostics (controlMs=${d.downloadControlMs ?? "n/a"} urlMs=${d.downloadUrlMs ?? "n/a"} totalMs=${d.totalMs ?? "n/a"} onDetail=${Boolean(d.onDetailPage)} sourceUrl=${d.sourceUrl || "none"})`
+          `Download diagnostics (controlMs=${d.downloadControlMs ?? "n/a"} urlMs=${d.downloadUrlMs ?? "n/a"} totalMs=${d.totalMs ?? "n/a"} onDetail=${Boolean(d.onDetailPage)} sourceUrl=${d.sourceUrl || "none"} rowCount=${d.rowCount ?? "n/a"} requestedType=${d.requestedType || "n/a"} selectedType=${d.selectedType || "n/a"} selectedLine=${d.selectedLine || "n/a"} rowIndex=${d.selectedRowIndex ?? "n/a"} fallbackRow=${d.fallbackRowUsed === undefined ? "n/a" : Boolean(d.fallbackRowUsed)} action=${d.selectedAction || "n/a"} actionHref=${d.selectedActionHref || "n/a"})`
         );
       }
       if (!result?.document) {
@@ -702,6 +725,62 @@ async function runStep(state) {
         }
       }
 
+      let bouyguesCaptureData = null;
+      if (isBouyguesProvider) {
+        const bouyguesPdfUrl = sourceUrl;
+        emitEvent(
+          FlowState.DOWNLOAD_OR_SELECT_BILL,
+          FlowStatus.STARTED,
+          `Bouygues PDF byte capture started (sourceUrl=${bouyguesPdfUrl || "none"})`
+        );
+        if (bouyguesPdfUrl) {
+          const fetchedPdf = await fetchPdfDataUrlInTab(flowContext.orangeTabId, bouyguesPdfUrl, TIMEOUTS_MS.LONG);
+          if (fetchedPdf?.ok && fetchedPdf?.dataUrl) {
+            bouyguesCaptureData = {
+              dataUrl: fetchedPdf.dataUrl,
+              mimeType: fetchedPdf.mimeType || "application/pdf",
+              responseUrl: fetchedPdf.responseUrl || bouyguesPdfUrl
+            };
+            emitEvent(
+              FlowState.DOWNLOAD_OR_SELECT_BILL,
+              FlowStatus.STARTED,
+              `Fetched Bouygues PDF bytes in page context (responseUrl=${bouyguesCaptureData.responseUrl || "none"})`
+            );
+          } else {
+            emitEvent(
+              FlowState.DOWNLOAD_OR_SELECT_BILL,
+              FlowStatus.STARTED,
+              `Bouygues page-context PDF fetch failed (error=${fetchedPdf?.error || "unknown"} mime=${fetchedPdf?.mimeType || "none"} responseUrl=${fetchedPdf?.responseUrl || "none"})`
+            );
+            const bgFetchedPdf = await fetchPdfDataUrlInBackground(bouyguesPdfUrl, TIMEOUTS_MS.LONG);
+            if (bgFetchedPdf?.ok && bgFetchedPdf?.dataUrl) {
+              bouyguesCaptureData = {
+                dataUrl: bgFetchedPdf.dataUrl,
+                mimeType: bgFetchedPdf.mimeType || "application/pdf",
+                responseUrl: bgFetchedPdf.responseUrl || bouyguesPdfUrl
+              };
+              emitEvent(
+                FlowState.DOWNLOAD_OR_SELECT_BILL,
+                FlowStatus.STARTED,
+                `Fetched Bouygues PDF bytes in background context (responseUrl=${bouyguesCaptureData.responseUrl || "none"})`
+              );
+            } else {
+              emitEvent(
+                FlowState.DOWNLOAD_OR_SELECT_BILL,
+                FlowStatus.STARTED,
+                `Bouygues PDF fetch failed in both contexts (pageError=${fetchedPdf?.error || "unknown"} bgError=${bgFetchedPdf?.error || "unknown"} pageMime=${fetchedPdf?.mimeType || "none"} bgMime=${bgFetchedPdf?.mimeType || "none"} pageResponseUrl=${fetchedPdf?.responseUrl || "none"} bgResponseUrl=${bgFetchedPdf?.responseUrl || "none"})`
+              );
+            }
+          }
+        } else {
+          emitEvent(
+            FlowState.DOWNLOAD_OR_SELECT_BILL,
+            FlowStatus.STARTED,
+            "Bouygues PDF source URL is missing; manual upload fallback remains available"
+          );
+        }
+      }
+
       let soshCaptureData = null;
       if (isSoshProvider) {
         const soshPdfUrl = sourceUrl;
@@ -821,6 +900,13 @@ async function runStep(state) {
           mimeType: captureData.mimeType || result.document.mimeType || "application/pdf",
           manualUploadRequired: false
         }
+        : bouyguesCaptureData?.dataUrl
+          ? {
+            ...result.document,
+            dataUrl: bouyguesCaptureData.dataUrl,
+            mimeType: bouyguesCaptureData.mimeType || result.document.mimeType || "application/pdf",
+            manualUploadRequired: false
+          }
         : redCaptureData?.dataUrl
           ? {
             ...result.document,
@@ -2036,6 +2122,13 @@ function startProviderLoginWatcher() {
         { Provider: flowContext.runConfig?.Provider },
         TIMEOUTS_MS.DEFAULT
       );
+      if (flowContext.runConfig?.Provider === "bouygues_provider") {
+        emitEvent(
+          FlowState.AUTH_PROVIDER,
+          FlowStatus.STARTED,
+          `Bouygues billing-ready poll: ready=${Boolean(ready?.ready)} ${formatBouyguesDiagnostics(ready?.diagnostics)}`
+        );
+      }
       if (!ready?.ready) return;
 
       flowContext.waitingForUser = false;
@@ -2414,5 +2507,20 @@ function formatFreeMobileDiagnostics(diagnostics) {
     `invoicesTab=${Boolean(d.hasInvoicesTab)}`,
     `invoicesPanel=${Boolean(d.hasInvoicesPanel)}`,
     `authGuess=${Boolean(d.authenticatedGuess)}`
+  ].join(" ");
+}
+
+function formatBouyguesDiagnostics(diagnostics) {
+  if (!diagnostics || typeof diagnostics !== "object") return "no diagnostics";
+  const d = diagnostics;
+  return [
+    `host=${String(d.host || "")}`,
+    `path=${String(d.path || "")}`,
+    `assistance=${Boolean(d.assistancePage)}`,
+    `loginFields=${Boolean(d.loginFields)}`,
+    `invoiceSignals=${Boolean(d.invoiceSignals)}`,
+    `onBillingPath=${Boolean(d.onBillingPath)}`,
+    `authGuess=${Boolean(d.authenticatedGuess)}`,
+    `resolution=${String(d.resolution || "none")}`
   ].join(" ");
 }

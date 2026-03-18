@@ -31,7 +31,7 @@ async function handleProviderAction(action, payload) {
     case "NAVIGATE_BILLING":
       return navigateBilling(provider, payload);
     case "DOWNLOAD_AND_EXTRACT_BILL":
-      return downloadAndExtractBill(provider);
+      return downloadAndExtractBill(provider, payload);
     default:
       throw new Error(`Unsupported orange action: ${action}`);
   }
@@ -104,14 +104,15 @@ async function navigateBilling(provider, payload) {
   return strategy.navigateBilling(createProviderContext(provider), payload);
 }
 
-async function downloadAndExtractBill(provider) {
+async function downloadAndExtractBill(provider, payload) {
   const strategy = getProviderStrategy(provider);
   const ctx = createProviderContext(provider);
   const startedAt = Date.now();
   const providerSelectors = getProviderBillingSelectors(provider);
   const billing = providerSelectors || window.__EXT_SELECTORS__.providerDefaults.billing;
   const beforeResources = new Set(performance.getEntriesByType("resource").map((entry) => entry.name));
-  const plan = await strategy.getDownloadPlan(ctx, { billing, beforeResources, startedAt });
+  const accountType = String(payload?.AccountType || "").trim();
+  const plan = await strategy.getDownloadPlan(ctx, { billing, beforeResources, startedAt, accountType });
   const downloadControl = plan?.downloadControl;
   if (!downloadControl) {
     throw new Error("Could not find provider PDF download button");
@@ -121,6 +122,7 @@ async function downloadAndExtractBill(provider) {
   const href = plan?.href || null;
   const downloadControlMs = plan?.downloadControlMs ?? null;
   const downloadUrlMs = plan?.downloadUrlMs ?? null;
+  const planDiagnostics = (plan && typeof plan.diagnostics === "object") ? plan.diagnostics : null;
   const totalMs = Date.now() - startedAt;
 
   const fileName = deriveFileName(provider, href || location.href, "application/pdf", "");
@@ -149,7 +151,8 @@ async function downloadAndExtractBill(provider) {
       downloadUrlMs: typeof downloadUrlMs === "number" ? downloadUrlMs : null,
       totalMs,
       sourceUrl: href || null,
-      onDetailPage: /\/detail-facture/.test(String(location.href || ""))
+      onDetailPage: /\/detail-facture/.test(String(location.href || "")),
+      ...(planDiagnostics || {})
     }
   };
 }
@@ -690,8 +693,14 @@ function filterDownloadUrl(url, provider) {
   if (!normalized) return null;
   if (!isAllowedDownloadHost(normalized, provider)) return null;
   if (isTrackingUrl(normalized)) return null;
+  if (isKnownNonInvoiceUrl(normalized, provider)) return null;
   if (isLikelyInvoiceDownload(normalized)) return normalized;
   return null;
+}
+
+function isKnownNonInvoiceUrl(url, provider) {
+  if (provider !== "bouygues_provider") return false;
+  return /\/static\/odr\/|coupon|byou_clients_box|assets\.bouyguestelecom\.fr\/ACO\/|\.(js|css|map)(\?|#|$)/i.test(String(url || ""));
 }
 
 function isAllowedDownloadHost(url, provider) {

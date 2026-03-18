@@ -37,7 +37,7 @@
       id: "bouygues_provider",
       label: "Bouygues",
       loginUrl: "https://www.bouyguestelecom.fr/mon-compte",
-      billingUrl: "https://www.bouyguestelecom.fr/mon-compte/factures",
+      billingUrl: "https://www.bouyguestelecom.fr/mon-compte/mes-factures",
       hosts: ["bouyguestelecom.fr"],
       requiresContractSelection: false
     },
