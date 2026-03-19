@@ -4,6 +4,7 @@
   if (!registry) return;
 
   const BOUYGUES_BILLING_URL = "https://www.bouyguestelecom.fr/mon-compte/mes-factures";
+  const BOUYGUES_DOWNLOAD_URL_WAIT_MS = 1500;
 
   function isAssistancePage(ctx) {
     const host = String(ctx.location.hostname || "").toLowerCase();
@@ -274,15 +275,14 @@
         href = null;
       }
       let downloadUrlMs = null;
+      let downloadUrlResolved = Boolean(href);
       if (!href) {
         ctx.realClick(downloadControl);
         didClickControl = true;
         const downloadUrlStart = Date.now();
-        href = await waitForBouyguesInvoiceUrl(ctx, downloadControl, options.beforeResources, 10000);
+        href = await waitForBouyguesInvoiceUrl(ctx, downloadControl, options.beforeResources, BOUYGUES_DOWNLOAD_URL_WAIT_MS);
         downloadUrlMs = Date.now() - downloadUrlStart;
-      }
-      if (!href) {
-        throw new Error("Could not resolve Bouygues invoice download URL");
+        downloadUrlResolved = Boolean(href);
       }
 
       const actionText = ctx.normalizeText(downloadControl.textContent || "");
@@ -293,6 +293,7 @@
         selectedType: selected.type,
         requestedType: targetType,
         fallbackRowUsed: usedFallbackRow,
+        downloadUrlResolved,
         selectedAction: actionText || "none",
         selectedActionHref: String(downloadControl.getAttribute("href") || "")
       };

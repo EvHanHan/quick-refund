@@ -25,6 +25,7 @@ const REPO_MANIFEST_URL = "https://raw.githubusercontent.com/MrCerise/dataiku-na
 const UPLOAD_ACTION_TIMEOUT_MS = 120_000;
 const ORANGE_PDF_CAPTURE_TIMEOUT_MS = 20_000;
 const BOUYGUES_DEBUGGER_CAPTURE_TIMEOUT_MS = 800;
+const BOUYGUES_PRE_NAVAN_BUDGET_MS = 3_500;
 const DEBUGGER_PROTOCOL_VERSION = "1.3";
 const ORANGE_PDF_FETCH_URL_PATTERN = "*://espace-client.orange.fr/ecd_wp/facture/v1.0/pdf*";
 const NAVIGO_PDF_FETCH_URL_PATTERN = "*://*.iledefrance-mobilites.fr/*";
@@ -453,16 +454,36 @@ async function runStep(state) {
           : null;
       let result;
       let captureData = null;
+      let bouyguesCaptureBudgetStartedAtMs = null;
       try {
         result = await runProviderAction("DOWNLOAD_AND_EXTRACT_BILL", flowContext.orangeTabId, {
           Provider: flowContext.runConfig.Provider,
           AccountType: flowContext.runConfig.AccountType
         }, TIMEOUTS_MS.LONG);
+        if (shouldCaptureBouyguesPdf) {
+          bouyguesCaptureBudgetStartedAtMs = Date.now();
+          emitEvent(
+            FlowState.DOWNLOAD_OR_SELECT_BILL,
+            FlowStatus.STARTED,
+            `Bouygues capture budget started (budgetMs=${BOUYGUES_PRE_NAVAN_BUDGET_MS})`
+          );
+        }
         if (debuggerCapture) {
           const debuggerWaitMs = shouldCaptureBouyguesPdf
-            ? BOUYGUES_DEBUGGER_CAPTURE_TIMEOUT_MS
+            ? Math.min(
+              BOUYGUES_DEBUGGER_CAPTURE_TIMEOUT_MS,
+              getRemainingBudgetMs(bouyguesCaptureBudgetStartedAtMs, BOUYGUES_PRE_NAVAN_BUDGET_MS)
+            )
             : ORANGE_PDF_CAPTURE_TIMEOUT_MS;
-          captureData = await debuggerCapture.waitForDataUrl(debuggerWaitMs);
+          if (debuggerWaitMs > 0) {
+            captureData = await debuggerCapture.waitForDataUrl(debuggerWaitMs);
+          } else if (shouldCaptureBouyguesPdf) {
+            emitEvent(
+              FlowState.DOWNLOAD_OR_SELECT_BILL,
+              FlowStatus.STARTED,
+              "Bouygues debugger wait skipped (capture budget exhausted)"
+            );
+          }
         }
       } finally {
         if (debuggerCapture) {
@@ -507,7 +528,12 @@ async function runStep(state) {
             FlowStatus.STARTED,
             `Captured ${captureFamily} PDF URL candidate (${captureData.pdfUrl}) source=${captureData?.debug?.stage || "parsed_payload"} original=${originalPdfUrl || "none"}`
           );
-          const fetchedPdf = await fetchPdfDataUrlInTab(flowContext.orangeTabId, captureData.pdfUrl, ORANGE_PDF_CAPTURE_TIMEOUT_MS);
+          const pageFetchTimeoutMs = shouldCaptureBouyguesPdf
+            ? getRemainingBudgetMs(bouyguesCaptureBudgetStartedAtMs, BOUYGUES_PRE_NAVAN_BUDGET_MS)
+            : ORANGE_PDF_CAPTURE_TIMEOUT_MS;
+          const fetchedPdf = pageFetchTimeoutMs > 0
+            ? await fetchPdfDataUrlInTab(flowContext.orangeTabId, captureData.pdfUrl, pageFetchTimeoutMs)
+            : { ok: false, error: "bouygues_capture_budget_exhausted" };
           if (fetchedPdf?.ok && fetchedPdf?.dataUrl) {
             captureData = {
               ...captureData,
@@ -520,7 +546,12 @@ async function runStep(state) {
               `Fetched ${captureFamily} PDF bytes from captured URL in page context`
             );
           } else {
-            const bgFetchedPdf = await fetchPdfDataUrlInBackground(captureData.pdfUrl, ORANGE_PDF_CAPTURE_TIMEOUT_MS);
+            const bgFetchTimeoutMs = shouldCaptureBouyguesPdf
+              ? getRemainingBudgetMs(bouyguesCaptureBudgetStartedAtMs, BOUYGUES_PRE_NAVAN_BUDGET_MS)
+              : ORANGE_PDF_CAPTURE_TIMEOUT_MS;
+            const bgFetchedPdf = bgFetchTimeoutMs > 0
+              ? await fetchPdfDataUrlInBackground(captureData.pdfUrl, bgFetchTimeoutMs)
+              : { ok: false, error: "bouygues_capture_budget_exhausted" };
             if (bgFetchedPdf?.ok && bgFetchedPdf?.dataUrl) {
               captureData = {
                 ...captureData,
@@ -726,8 +757,12 @@ async function runStep(state) {
           FlowStatus.STARTED,
           `Bouygues PDF byte capture started (sourceUrl=${bouyguesPdfUrl || "none"})`
         );
-        if (bouyguesPdfUrl) {
-          const fetchedPdf = await fetchPdfDataUrlInTab(flowContext.orangeTabId, bouyguesPdfUrl, TIMEOUTS_MS.LONG);
+        const remainingAtStartMs = getRemainingBudgetMs(bouyguesCaptureBudgetStartedAtMs, BOUYGUES_PRE_NAVAN_BUDGET_MS);
+        if (bouyguesPdfUrl && remainingAtStartMs > 0) {
+          const pageFetchTimeoutMs = getRemainingBudgetMs(bouyguesCaptureBudgetStartedAtMs, BOUYGUES_PRE_NAVAN_BUDGET_MS);
+          const fetchedPdf = pageFetchTimeoutMs > 0
+            ? await fetchPdfDataUrlInTab(flowContext.orangeTabId, bouyguesPdfUrl, pageFetchTimeoutMs)
+            : { ok: false, error: "bouygues_capture_budget_exhausted" };
           if (fetchedPdf?.ok && fetchedPdf?.dataUrl) {
             bouyguesCaptureData = {
               dataUrl: fetchedPdf.dataUrl,
@@ -745,7 +780,10 @@ async function runStep(state) {
               FlowStatus.STARTED,
               `Bouygues page-context PDF fetch failed (error=${fetchedPdf?.error || "unknown"} mime=${fetchedPdf?.mimeType || "none"} responseUrl=${fetchedPdf?.responseUrl || "none"})`
             );
-            const bgFetchedPdf = await fetchPdfDataUrlInBackground(bouyguesPdfUrl, TIMEOUTS_MS.LONG);
+            const bgFetchTimeoutMs = getRemainingBudgetMs(bouyguesCaptureBudgetStartedAtMs, BOUYGUES_PRE_NAVAN_BUDGET_MS);
+            const bgFetchedPdf = bgFetchTimeoutMs > 0
+              ? await fetchPdfDataUrlInBackground(bouyguesPdfUrl, bgFetchTimeoutMs)
+              : { ok: false, error: "bouygues_capture_budget_exhausted" };
             if (bgFetchedPdf?.ok && bgFetchedPdf?.dataUrl) {
               bouyguesCaptureData = {
                 dataUrl: bgFetchedPdf.dataUrl,
@@ -765,6 +803,12 @@ async function runStep(state) {
               );
             }
           }
+        } else if (bouyguesPdfUrl) {
+          emitEvent(
+            FlowState.DOWNLOAD_OR_SELECT_BILL,
+            FlowStatus.STARTED,
+            "Bouygues PDF byte capture skipped (capture budget exhausted)"
+          );
         } else {
           emitEvent(
             FlowState.DOWNLOAD_OR_SELECT_BILL,
@@ -772,6 +816,15 @@ async function runStep(state) {
             "Bouygues PDF source URL is missing; manual upload fallback remains available"
           );
         }
+        const elapsedMs = bouyguesCaptureBudgetStartedAtMs
+          ? Date.now() - bouyguesCaptureBudgetStartedAtMs
+          : null;
+        const remainingMs = getRemainingBudgetMs(bouyguesCaptureBudgetStartedAtMs, BOUYGUES_PRE_NAVAN_BUDGET_MS);
+        emitEvent(
+          FlowState.DOWNLOAD_OR_SELECT_BILL,
+          FlowStatus.STARTED,
+          `Bouygues capture budget result (budgetMs=${BOUYGUES_PRE_NAVAN_BUDGET_MS} elapsedMs=${elapsedMs ?? "n/a"} remainingMs=${remainingMs} timedOutBeforeBytes=${remainingMs <= 0 && !captureData?.dataUrl && !bouyguesCaptureData?.dataUrl})`
+        );
       }
 
       let soshCaptureData = null;
@@ -2209,6 +2262,11 @@ function withTimeout(promise, timeoutMs, message) {
         reject(error);
       });
   });
+}
+
+function getRemainingBudgetMs(startedAtMs, budgetMs) {
+  if (!Number.isFinite(startedAtMs) || !Number.isFinite(budgetMs)) return Number(budgetMs) || 0;
+  return Math.max(0, Number(budgetMs) - (Date.now() - Number(startedAtMs)));
 }
 
 async function runNavanAction(action, tabId, payload, timeoutMs) {
