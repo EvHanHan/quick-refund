@@ -133,7 +133,7 @@ async function downloadAndExtractBill(provider, payload) {
     realClick(downloadControl);
   }
   const billText = document.body.textContent || "";
-  const navanHints = strategy.buildNavanHints?.(ctx, { href, fileName }) || undefined;
+  const navanHints = strategy.buildNavanHints?.(ctx, { href, fileName, accountType }) || undefined;
 
   return {
     billText,

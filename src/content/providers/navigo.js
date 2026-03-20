@@ -84,9 +84,10 @@
       return "attestation_navigo.pdf";
     },
 
-    buildNavanHints(ctx) {
+    buildNavanHints(ctx, options) {
+      const accountType = String(options?.accountType || "").trim();
       return {
-        expenseType: "commuter benefits",
+        ...(accountType === "monthly" ? { expenseType: "Commuter Benefits" } : {}),
         transactionDateISO: ctx.getCurrentMonthStartISO()
       };
     }

@@ -128,6 +128,9 @@ async function autofillTransaction(draft) {
 
 async function uploadDocument(documentPayload) {
   const navanHints = documentPayload?.navanHints || {};
+  window.__NAVAN_EXPENSE_TYPE_HINT = typeof navanHints.expenseType === "string"
+    ? navanHints.expenseType.trim()
+    : "";
   const attached = await attachDocumentToFileInput(documentPayload, 25_000);
   if (!attached.ok) {
     return {
@@ -402,7 +405,7 @@ function setupNavanDomWatcher() {
 }
 
 async function tryAutoFillExpenseThenDescription() {
-  const expenseSelected = await ensureExpenseTypeSelected("work from home");
+  const expenseSelected = await ensureExpenseTypeSelected(resolveRouteWatcherExpenseTypeLabel());
   if (!expenseSelected) return false;
 
   const descriptionInput = await waitForCustomDescriptionInput(10_000);
@@ -417,12 +420,20 @@ async function ensureExpenseTypeSelected(expenseTypeLabel) {
   if (!input) return false;
 
   const current = normalizeComparableText(input.value || "");
-  if (current.includes("work from home") || current.includes("teletravail")) {
+  const targetLabel = String(expenseTypeLabel || "").trim() || "work from home";
+  const normalizedTarget = normalizeComparableText(targetLabel);
+  if ((normalizedTarget && current.includes(normalizedTarget))
+    || (normalizedTarget.includes("work from home") && current.includes("teletravail"))) {
     return true;
   }
 
-  const result = await typeExpenseTypeOnlyWithDebug(expenseTypeLabel || "work from home");
+  const result = await typeExpenseTypeOnlyWithDebug(targetLabel);
   return Boolean(result?.typed);
+}
+
+function resolveRouteWatcherExpenseTypeLabel() {
+  const hint = String(window.__NAVAN_EXPENSE_TYPE_HINT || "").trim();
+  return hint || "work from home";
 }
 
 function openExpenseTypeDropdown(input) {
