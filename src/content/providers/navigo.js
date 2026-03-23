@@ -4,27 +4,39 @@
   if (!registry) return;
 
   registry.register("navigo_provider", {
+    checkProviderSession(ctx) {
+      const diagnostics = getNavigoAuthDiagnostics(ctx);
+      return {
+        authenticated: isNavigoAuthenticated(ctx),
+        diagnostics
+      };
+    },
+
     isAuthenticated(ctx) {
       return isNavigoAuthenticated(ctx);
     },
 
     checkBillingReady(ctx) {
+      const diagnostics = getNavigoAuthDiagnostics(ctx);
       return {
-        ready: isNavigoAuthenticated(ctx)
-          && (ctx.findByLooseText("mon navigo") || ctx.findByLooseText("mes services") || ctx.findByLooseText("bienvenue"))
+        ready: isNavigoAuthenticated(ctx),
+        diagnostics
       };
     },
 
     async auth(ctx) {
+      const diagnostics = getNavigoAuthDiagnostics(ctx);
       if (isNavigoAuthenticated(ctx)) {
-        return { authenticated: true, skippedLogin: true, captchaRequired: false };
+        return { authenticated: true, skippedLogin: true, captchaRequired: false, diagnostics };
       }
-      return { authenticated: false, manualLoginRequired: true, captchaRequired: false };
+      return { authenticated: false, manualLoginRequired: true, captchaRequired: false, diagnostics };
     },
 
     async navigateBilling(ctx, payload) {
-      if (!isNavigoAuthenticated(ctx)) {
-        throw new Error("Navigo user is not authenticated");
+      const authenticated = await ensureNavigoAuthenticated(6000, ctx);
+      if (!authenticated) {
+        const diagnostics = getNavigoAuthDiagnostics(ctx);
+        throw new Error(`Navigo user is not authenticated | ${formatNavigoAuthDiagnostics(diagnostics)} | ${summarizeNavigoPageDiagnostics(ctx)}`);
       }
       await waitForNavigoRoutingHints(4000, ctx);
       const accountType = String(payload?.AccountType || "").trim();
@@ -295,6 +307,12 @@
   async function openNavigoAttestationFlow(timeoutMs, ctx) {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
+      const detailToAttestation = ctx.pick(["#compte-user-detail-contrat-nav-2", "a[href*='/attestation/']"]);
+      if (detailToAttestation && ctx.isVisible(detailToAttestation)) {
+        ctx.realClick(detailToAttestation);
+        await ctx.wait(1000);
+      }
+
       const annualActive = findNavigoAnnualActiveEntry(ctx);
       if (annualActive) {
         ctx.realClick(annualActive);
@@ -494,6 +512,65 @@
       || text.includes("deconnexion")
       || text.includes("déconnexion")
     );
-    return (inMonEspace || inJeGereMaCarte) && hasAuthenticatedMarker;
+    if (inMonEspace || inJeGereMaCarte) return true;
+    return hasAuthenticatedMarker;
+  }
+
+  async function ensureNavigoAuthenticated(timeoutMs, ctx) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (isNavigoAuthenticated(ctx)) return true;
+      await ctx.wait(250);
+    }
+    return isNavigoAuthenticated(ctx);
+  }
+
+  function getNavigoAuthDiagnostics(ctx) {
+    const host = String(ctx.location.hostname || "").toLowerCase();
+    const path = String(ctx.location.pathname || "");
+    const href = String(ctx.location.href || "");
+    const text = ctx.normalizeComparableText(ctx.document.body?.textContent || "");
+    const hasLoginFields = Boolean(
+      ctx.document.querySelector("#id-Mail")
+      || ctx.document.querySelector("#id-pwd")
+      || ctx.document.querySelector("#form-log")
+    );
+    const onLoginPath = /\/auth\/realms\/connect\/login-actions\/authenticate/.test(path);
+    const inMonEspace = host.includes("mon-espace.iledefrance-mobilites.fr");
+    const inJeGereMaCarte = host.includes("jegeremacartenavigo.iledefrance-mobilites.fr");
+    const hasAuthenticatedMarker = (
+      text.includes("mon espace personnel")
+      || text.includes("mon navigo")
+      || text.includes("mes services")
+      || text.includes("deconnexion")
+      || text.includes("déconnexion")
+    );
+    return {
+      host,
+      path,
+      href,
+      inMonEspace,
+      inJeGereMaCarte,
+      onLoginPath,
+      hasLoginFields,
+      hasMonEspacePersonnelText: text.includes("mon espace personnel"),
+      hasMonNavigoText: text.includes("mon navigo"),
+      hasMesServicesText: text.includes("mes services"),
+      hasDeconnexionText: text.includes("deconnexion") || text.includes("déconnexion"),
+      hasAuthenticatedMarker
+    };
+  }
+
+  function formatNavigoAuthDiagnostics(diagnostics) {
+    const d = diagnostics || {};
+    return [
+      `host=${String(d.host || "")}`,
+      `path=${String(d.path || "")}`,
+      `monEspaceHost=${Boolean(d.inMonEspace)}`,
+      `jgmnHost=${Boolean(d.inJeGereMaCarte)}`,
+      `loginPath=${Boolean(d.onLoginPath)}`,
+      `loginFields=${Boolean(d.hasLoginFields)}`,
+      `marker=${Boolean(d.hasAuthenticatedMarker)}`
+    ].join(" ");
   }
 })(typeof window !== "undefined" ? window : globalThis);

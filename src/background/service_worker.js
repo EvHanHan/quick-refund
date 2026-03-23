@@ -323,12 +323,24 @@ async function runStep(state) {
             `Free Mobile session probe: auth=${Boolean(session?.authenticated)} | ${formatFreeMobileDiagnostics(session.diagnostics)}`
           );
         }
+        if (flowContext.runConfig.Provider === "navigo_provider" && session?.diagnostics) {
+          emitEvent(
+            FlowState.AUTH_PROVIDER,
+            FlowStatus.STARTED,
+            `Navigo session probe: auth=${Boolean(session?.authenticated)} | ${formatNavigoDiagnostics(session.diagnostics)}`
+          );
+        }
         if (session?.authenticated) {
           clearRunPassword();
+          const sessionDiagnostics = flowContext.runConfig.Provider === "free_mobile_provider" && session?.diagnostics
+            ? ` | ${formatFreeMobileDiagnostics(session.diagnostics)}`
+            : flowContext.runConfig.Provider === "navigo_provider" && session?.diagnostics
+              ? ` | ${formatNavigoDiagnostics(session.diagnostics)}`
+              : "";
           emitEvent(
             FlowState.AUTH_PROVIDER,
             FlowStatus.SUCCESS,
-            `${flowContext.runConfig.Provider} session already active, skipping login${flowContext.runConfig.Provider === "free_mobile_provider" && session?.diagnostics ? ` | ${formatFreeMobileDiagnostics(session.diagnostics)}` : ""}`
+            `${flowContext.runConfig.Provider} session already active, skipping login${sessionDiagnostics}`
           );
           return;
         }
@@ -351,6 +363,13 @@ async function runStep(state) {
             FlowState.AUTH_PROVIDER,
             FlowStatus.STARTED,
             `Free Mobile auth result: manual=${Boolean(authResult?.manualLoginRequired)} captcha=${Boolean(authResult?.captchaRequired)} otp=${Boolean(authResult?.smsCodeRequired)}`
+          );
+        }
+        if (flowContext.runConfig.Provider === "navigo_provider" && authResult?.diagnostics) {
+          emitEvent(
+            FlowState.AUTH_PROVIDER,
+            FlowStatus.STARTED,
+            `Navigo auth result: manual=${Boolean(authResult?.manualLoginRequired)} captcha=${Boolean(authResult?.captchaRequired)} | ${formatNavigoDiagnostics(authResult.diagnostics)}`
           );
         }
 
@@ -406,8 +425,12 @@ async function runStep(state) {
 
         if (flowContext.runConfig.Provider === "navigo_provider") {
           for (let attempt = 1; attempt <= 2; attempt += 1) {
-            const onPrelevements = /\/prelevements\/[^/?#]+/i.test(String(navigation.detailUrl || ""));
-            if (onPrelevements) break;
+            const resolvedDetailUrl = String(navigation.detailUrl || "");
+            const isMonthlyNavigo = String(flowContext.runConfig.AccountType || "").trim() === "monthly";
+            const onNavigoTerminalPath = isMonthlyNavigo
+              ? /\/(?:prelevements|attestation)\/[^/?#]+/i.test(resolvedDetailUrl)
+              : /\/(?:prelevements|attestation|espace_client\/detail)\/[^/?#]+/i.test(resolvedDetailUrl);
+            if (onNavigoTerminalPath) break;
 
             emitEvent(
               FlowState.NAVIGATE_PROVIDER_BILLING,
@@ -2431,7 +2454,15 @@ function sleep(ms) {
 function startProviderLoginWatcher() {
   stopProviderLoginWatcher();
   const runId = flowContext.activeRunId;
-  const intervalMs = flowContext.runConfig?.Provider === "free_mobile_provider" ? 3500 : 1500;
+  const providerId = normalizeProviderId(flowContext.runConfig?.Provider);
+  const intervalMs = providerId === "free_mobile_provider" ? 3500 : 1500;
+  let probeCount = 0;
+  let consecutiveProbeErrors = 0;
+  emitEvent(
+    FlowState.AUTH_PROVIDER,
+    FlowStatus.STARTED,
+    `Provider login watcher started (provider=${providerId}, intervalMs=${intervalMs})`
+  );
   flowContext.providerLoginWatcher = setInterval(async () => {
     if (!isRunActive(runId)) {
       stopProviderLoginWatcher();
@@ -2442,6 +2473,7 @@ function startProviderLoginWatcher() {
       return;
     }
     if (!flowContext.orangeTabId) return;
+    probeCount += 1;
 
     try {
       const ready = await runProviderAction(
@@ -2450,15 +2482,43 @@ function startProviderLoginWatcher() {
         { Provider: flowContext.runConfig?.Provider },
         TIMEOUTS_MS.DEFAULT
       );
-      if (!ready?.ready) return;
+      consecutiveProbeErrors = 0;
+      const diagnosticsText = providerId === "free_mobile_provider"
+        ? formatFreeMobileDiagnostics(ready?.diagnostics)
+        : providerId === "navigo_provider"
+          ? formatNavigoDiagnostics(ready?.diagnostics)
+          : null;
+
+      if (!ready?.ready) {
+        if (providerId === "navigo_provider" || probeCount === 1 || probeCount % 4 === 0) {
+          emitEvent(
+            FlowState.AUTH_PROVIDER,
+            FlowStatus.STARTED,
+            `Provider login watcher probe ${probeCount}: ready=false${diagnosticsText ? ` | ${diagnosticsText}` : ""}`
+          );
+        }
+        return;
+      }
 
       flowContext.waitingForUser = false;
       flowContext.waitingReason = null;
       stopProviderLoginWatcher();
-      emitEvent(FlowState.AUTH_PROVIDER, FlowStatus.SUCCESS, "Provider billing page detected (Vos factures). Continuing flow.");
+      emitEvent(
+        FlowState.AUTH_PROVIDER,
+        FlowStatus.SUCCESS,
+        `Provider ready after login detected (probe=${probeCount}). Continuing flow.${diagnosticsText ? ` | ${diagnosticsText}` : ""}`
+      );
       runStateMachine(runId).catch((error) => failFlow(error, runId));
-    } catch (_error) {
-      // keep polling
+    } catch (error) {
+      consecutiveProbeErrors += 1;
+      const errorMessage = String(error?.message || error || "unknown_error");
+      if (providerId === "navigo_provider" || consecutiveProbeErrors === 1 || consecutiveProbeErrors % 3 === 0) {
+        emitEvent(
+          FlowState.AUTH_PROVIDER,
+          FlowStatus.STARTED,
+          `Provider login watcher probe ${probeCount} failed (consecutiveErrors=${consecutiveProbeErrors}): ${errorMessage}`
+        );
+      }
     }
   }, intervalMs);
 }
@@ -2828,5 +2888,23 @@ function formatFreeMobileDiagnostics(diagnostics) {
     `invoicesTab=${Boolean(d.hasInvoicesTab)}`,
     `invoicesPanel=${Boolean(d.hasInvoicesPanel)}`,
     `authGuess=${Boolean(d.authenticatedGuess)}`
+  ].join(" ");
+}
+
+function formatNavigoDiagnostics(diagnostics) {
+  if (!diagnostics || typeof diagnostics !== "object") return "no diagnostics";
+  const d = diagnostics;
+  return [
+    `host=${String(d.host || "")}`,
+    `path=${String(d.path || "")}`,
+    `monEspaceHost=${Boolean(d.inMonEspace)}`,
+    `jgmnHost=${Boolean(d.inJeGereMaCarte)}`,
+    `loginPath=${Boolean(d.onLoginPath)}`,
+    `loginFields=${Boolean(d.hasLoginFields)}`,
+    `marker=${Boolean(d.hasAuthenticatedMarker)}`,
+    `monEspaceTxt=${Boolean(d.hasMonEspacePersonnelText)}`,
+    `monNavigoTxt=${Boolean(d.hasMonNavigoText)}`,
+    `mesServicesTxt=${Boolean(d.hasMesServicesText)}`,
+    `logoutTxt=${Boolean(d.hasDeconnexionText)}`
   ].join(" ");
 }
