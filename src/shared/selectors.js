@@ -286,6 +286,10 @@
         date: ["input[name='date']", "input[type='date']"],
         tax: ["input[name='tax']", "input[aria-label*='tax']"],
         description: ["textarea[name='description']", "textarea", "input[name='description']"],
+        commuterPassOption: [
+          "[data-testid='custom-field-customField5'] input[type='text']",
+          "[data-testid='label-Commuter-Pass-Option'] input[type='text']"
+        ],
         file: ["input#fileInput", "input[type='file']"]
       }
     }

@@ -131,6 +131,9 @@ async function uploadDocument(documentPayload) {
   window.__NAVAN_EXPENSE_TYPE_HINT = typeof navanHints.expenseType === "string"
     ? navanHints.expenseType.trim()
     : "";
+  window.__NAVAN_COMMUTER_PASS_OPTION_QUERY = typeof navanHints.commuterPassOptionQuery === "string"
+    ? navanHints.commuterPassOptionQuery.trim()
+    : "";
   const attached = await attachDocumentToFileInput(documentPayload, 25_000);
   if (!attached.ok) {
     return {
@@ -159,6 +162,8 @@ async function uploadDocument(documentPayload) {
   let hintsApplied = false;
   let expenseTypeSelected = false;
   let expenseTypeDebug = null;
+  let commuterPassOptionSelected = false;
+  let commuterPassDebug = null;
 
   if (NAVAN_UPLOAD_AUTOFILL_ENABLED) {
     if (createFlow.debug?.modalCleared === true) {
@@ -173,12 +178,16 @@ async function uploadDocument(documentPayload) {
     const expenseTypeResult = await finalizeExpenseTypeSelection(navanHints.expenseType);
     expenseTypeSelected = Boolean(expenseTypeResult?.selected);
     expenseTypeDebug = expenseTypeResult?.debug || null;
+    const commuterPassResult = await ensureCommuterPassOptionSelected(navanHints.commuterPassOptionQuery);
+    commuterPassOptionSelected = Boolean(commuterPassResult?.selected);
+    commuterPassDebug = commuterPassResult?.debug || null;
   }
   return {
     uploaded: true,
     attachedFileName: attached.fileName,
     createSingleTransactionClicked: createFlow.clicked,
     expenseTypeSelected,
+    commuterPassOptionSelected,
     hintsApplied,
     debug: {
       ...(attached.debug || {}),
@@ -186,7 +195,8 @@ async function uploadDocument(documentPayload) {
       uploadAutofillEnabled: NAVAN_UPLOAD_AUTOFILL_ENABLED,
       routeWatcherAutofillEnabled: NAVAN_ROUTE_WATCHER_AUTOFILL_ENABLED,
       descriptionPrefilled,
-      expenseTypeDebug
+      expenseTypeDebug,
+      commuterPassDebug
     }
   };
 }
@@ -405,13 +415,51 @@ function setupNavanDomWatcher() {
 }
 
 async function tryAutoFillExpenseThenDescription() {
+  reportNavanDebugEvent("route_autofill_start", `path=${location.pathname}`);
   const expenseSelected = await ensureExpenseTypeSelected(resolveRouteWatcherExpenseTypeLabel());
-  if (!expenseSelected) return false;
+  reportNavanDebugEvent("expense_type_result", `selected=${Boolean(expenseSelected)}`);
+  if (!expenseSelected) {
+    reportNavanDebugEvent("route_autofill_stop", "expense_type_not_selected");
+    return false;
+  }
 
   const descriptionInput = await waitForCustomDescriptionInput(10_000);
-  if (!descriptionInput) return false;
+  if (!descriptionInput) {
+    reportNavanDebugEvent("route_autofill_stop", "description_input_not_found");
+    return false;
+  }
 
   setInputValue(descriptionInput, "monthly invoice");
+  reportNavanDebugEvent("description_set", "value=monthly invoice");
+  const commuterPassQuery = resolveRouteWatcherCommuterPassOptionQuery();
+  reportNavanDebugEvent("commuter_pass_query", commuterPassQuery || "empty");
+  if (commuterPassQuery) {
+    const commuterPassTypeStartMs = Date.now();
+    let commuterPassResult = await ensureCommuterPassOptionSelected(commuterPassQuery);
+    reportNavanDebugEvent("commuter_pass_first_type_ms", String(Date.now() - commuterPassTypeStartMs));
+    if (commuterPassResult?.selected) {
+      const normalizedQuery = normalizeComparableText(commuterPassQuery);
+      const settleDeadline = Date.now() + 500;
+      while (Date.now() < settleDeadline) {
+        const settledValue = normalizeComparableText(findCommuterPassOptionInput()?.value || "");
+        if (settledValue && settledValue.includes(normalizedQuery)) break;
+        await wait(100);
+      }
+      const afterSetValue = normalizeComparableText(findCommuterPassOptionInput()?.value || "");
+      if (!afterSetValue.includes(normalizedQuery)) {
+        reportNavanDebugEvent("commuter_pass_reapply", `previous=${afterSetValue || "empty"}`);
+        commuterPassResult = await ensureCommuterPassOptionSelected(commuterPassQuery);
+      }
+    }
+    reportNavanDebugEvent(
+      "commuter_pass_result",
+      `selected=${Boolean(commuterPassResult?.selected)} reason=${String(commuterPassResult?.debug?.reason || "none")}`
+    );
+    if (!commuterPassResult?.selected) {
+      console.warn("[quick-refund] Commuter Pass Option autofill did not select an option", commuterPassResult?.debug || {});
+    }
+  }
+  reportNavanDebugEvent("route_autofill_done", "success");
   return true;
 }
 
@@ -419,21 +467,38 @@ async function ensureExpenseTypeSelected(expenseTypeLabel) {
   const input = findExpenseTypeInput();
   if (!input) return false;
 
-  const current = normalizeComparableText(input.value || "");
   const targetLabel = String(expenseTypeLabel || "").trim() || "work from home";
+  // Always confirm by selecting an option from the dropdown so dependent custom fields are fully initialized.
+  const selectedResult = await selectExpenseTypeByTypingAndFirstOptionWithDebug(targetLabel, 4_000);
+  if (selectedResult?.selected) return true;
+
+  const current = normalizeComparableText(input.value || "");
   const normalizedTarget = normalizeComparableText(targetLabel);
   if ((normalizedTarget && current.includes(normalizedTarget))
     || (normalizedTarget.includes("work from home") && current.includes("teletravail"))) {
     return true;
   }
 
-  const result = await typeExpenseTypeOnlyWithDebug(targetLabel);
-  return Boolean(result?.typed);
+  // Fallback to typing-only behavior if dropdown options cannot be clicked.
+  const typedOnlyResult = await typeExpenseTypeOnlyWithDebug(targetLabel);
+  return Boolean(typedOnlyResult?.typed);
 }
 
 function resolveRouteWatcherExpenseTypeLabel() {
   const hint = String(window.__NAVAN_EXPENSE_TYPE_HINT || "").trim();
   return hint || "work from home";
+}
+
+function resolveRouteWatcherCommuterPassOptionQuery() {
+  const explicit = String(window.__NAVAN_COMMUTER_PASS_OPTION_QUERY || "").trim();
+  if (explicit) return explicit;
+
+  // Fallback: monthly Navigo flow can still infer the pass query from expense type.
+  const expenseTypeHint = normalizeComparableText(window.__NAVAN_EXPENSE_TYPE_HINT || "");
+  if (expenseTypeHint.includes("commuter benefits")) {
+    return "Navigo Monthly";
+  }
+  return "";
 }
 
 function openExpenseTypeDropdown(input) {
@@ -518,6 +583,115 @@ async function waitForCustomDescriptionInput(timeoutMs) {
 
 function findCustomDescriptionInput() {
   return querySelectorDeep("[data-testid='custom-field-customField3'] input");
+}
+
+function findCommuterPassOptionInput() {
+  const selectorInput = queryAny(window.__EXT_SELECTORS__.navan.transactionForm.commuterPassOption || [], { allowHidden: true });
+  if (selectorInput) return selectorInput;
+
+  return querySelectorDeep("[data-testid='custom-field-customField5'] input[type='text']")
+    || querySelectorDeep("[data-testid='label-Commuter-Pass-Option'] input[type='text']")
+    || null;
+}
+
+function openCommuterPassOptionDropdown(input) {
+  const wrapper = querySelectorDeep("[data-testid='label-Commuter-Pass-Option']")
+    || input?.closest?.("[data-testid='label-Commuter-Pass-Option']")
+    || input?.closest?.("[data-testid='custom-field-customField5']")
+    || input;
+  if (wrapper) {
+    realClick(wrapper);
+  } else if (input) {
+    realClick(input);
+  }
+  input?.focus?.();
+}
+
+async function ensureCommuterPassOptionSelected(optionQuery) {
+  const query = String(optionQuery || "").trim();
+  if (!query) {
+    reportNavanDebugEvent("commuter_pass_skip", "missing_option_query");
+    return { selected: false, debug: { skipped: true, reason: "missing_option_query" } };
+  }
+
+  const input = await waitForCommuterPassOptionInput(8_000);
+  if (!input) {
+    reportNavanDebugEvent("commuter_pass_input", "not_found");
+    return { selected: false, debug: { reason: "input_not_found", optionQuery: query } };
+  }
+  reportNavanDebugEvent("commuter_pass_input", "found");
+
+  const normalizedQuery = normalizeComparableText(query);
+  const current = normalizeComparableText(input.value || "");
+  if (current && current.includes(normalizedQuery)) {
+    reportNavanDebugEvent("commuter_pass_already_selected", current);
+    return {
+      selected: true,
+      debug: {
+        alreadySelected: true,
+        optionQuery: normalizedQuery,
+        finalValue: current
+      }
+    };
+  }
+
+  openCommuterPassOptionDropdown(input);
+  await wait(100);
+  typeComboBoxQuery(input, query);
+  reportNavanDebugEvent(
+    "commuter_pass_typed_query",
+    `query=${normalizedQuery} inputValue=${normalizeComparableText(input.value || "") || "empty"}`
+  );
+  reportNavanDebugEvent("commuter_pass_ready_for_manual_click", "typed_query_waiting_user_click");
+  return {
+    selected: true,
+    debug: {
+      reason: null,
+      optionQuery: normalizedQuery,
+      typedOnly: true,
+      manualOptionClickRequired: true,
+      finalValue: normalizeComparableText(input.value || "")
+    }
+  };
+}
+
+async function waitForCommuterPassOptionInput(timeoutMs) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const input = findCommuterPassOptionInput();
+    if (input) return input;
+    await wait(250);
+  }
+  return null;
+}
+
+function reportNavanDebugEvent(step, details) {
+  try {
+    if (!chrome?.runtime?.sendMessage) return;
+    chrome.runtime.sendMessage({
+      type: "NAVAN_DEBUG_EVENT",
+      payload: {
+        step: String(step || ""),
+        details: String(details || "").slice(0, 400)
+      }
+    }, () => {
+      void chrome.runtime.lastError;
+    });
+  } catch (_error) {
+    // Best-effort debug reporting only.
+  }
+}
+
+function typeComboBoxQuery(input, query) {
+  if (!input) return;
+  const value = String(query || "");
+  input.focus?.();
+  input.value = "";
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.dispatchEvent(new KeyboardEvent("keydown", { key: "Backspace", code: "Backspace", bubbles: true }));
+  input.value = value;
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.dispatchEvent(new KeyboardEvent("keyup", { key: value.slice(-1) || "a", code: "KeyA", bubbles: true }));
 }
 
 function setInputValue(input, value) {

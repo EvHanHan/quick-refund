@@ -99,7 +99,12 @@
     buildNavanHints(ctx, options) {
       const accountType = String(options?.accountType || "").trim();
       return {
-        ...(accountType === "monthly" ? { expenseType: "Commuter Benefits" } : {}),
+        ...(accountType === "monthly"
+          ? {
+            expenseType: "Commuter Benefits",
+            commuterPassOptionQuery: "Navigo Monthly"
+          }
+          : {}),
         transactionDateISO: ctx.getCurrentMonthStartISO()
       };
     }

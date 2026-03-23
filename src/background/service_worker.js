@@ -139,9 +139,30 @@ async function handleMessage(message) {
       return updateReminderSettings(message.payload);
     case MessageType.TRIGGER_REMINDER_TEST:
       return triggerReminderTest();
+    case MessageType.NAVAN_DEBUG_EVENT:
+      return handleNavanDebugEvent(message.payload || {});
     default:
       return { ok: false, error: { code: ErrorCode.UNKNOWN, message: "Unsupported message type" } };
   }
+}
+
+function handleNavanDebugEvent(payload) {
+  const step = String(payload?.step || "").trim() || "unknown_step";
+  const details = String(payload?.details || "").trim() || "";
+  const formatted = details
+    ? `[Navan Autofill] ${step}: ${details}`
+    : `[Navan Autofill] ${step}`;
+  const stateForLog = flowContext.state && flowContext.state !== FlowState.IDLE
+    ? flowContext.state
+    : FlowState.UPLOAD_DOCUMENT;
+  emitEvent(stateForLog, FlowStatus.STARTED, formatted);
+  return {
+    ok: true,
+    data: {
+      logged: true,
+      stateForLog
+    }
+  };
 }
 
 async function handleAlarm(alarm) {
@@ -1042,7 +1063,7 @@ async function runStep(state) {
         emitEvent(
           FlowState.UPLOAD_DOCUMENT,
           FlowStatus.STARTED,
-          `Preparing Navan upload payload (hasDataUrl=${Boolean(flowContext.documentPayload?.dataUrl)} mime=${flowContext.documentPayload?.mimeType || "none"} name=${flowContext.documentPayload?.name || "none"} sourceUrl=${flowContext.documentPayload?.sourceUrl || "none"})`
+          `Preparing Navan upload payload (hasDataUrl=${Boolean(flowContext.documentPayload?.dataUrl)} mime=${flowContext.documentPayload?.mimeType || "none"} name=${flowContext.documentPayload?.name || "none"} sourceUrl=${flowContext.documentPayload?.sourceUrl || "none"} expHint=${flowContext.documentPayload?.navanHints?.expenseType || "none"} passHint=${flowContext.documentPayload?.navanHints?.commuterPassOptionQuery || "none"})`
         );
         const uploadResult = await runNavanAction(
           "UPLOAD_DOCUMENT",
