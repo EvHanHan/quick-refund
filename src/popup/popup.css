@@ -47,32 +47,6 @@ h2 {
   font-size: 12px;
 }
 
-.share {
-  margin: 0;
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.share a {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  color: var(--primary);
-  text-decoration: none;
-  font-weight: 700;
-}
-
-.share a svg {
-  width: 18px;
-  height: 18px;
-}
-
-.share a:hover {
-  opacity: 0.85;
-}
-
 label {
   display: block;
   margin-bottom: 8px;
