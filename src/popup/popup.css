@@ -97,22 +97,6 @@ input[type="checkbox"] {
   margin-bottom: 0;
 }
 
-.supportLink {
-  margin: 0;
-  font-size: 12px;
-  white-space: nowrap;
-}
-
-.supportLink a {
-  color: var(--primary);
-  text-decoration: none;
-  font-weight: 600;
-}
-
-.supportLink a:hover {
-  text-decoration: underline;
-}
-
 .instruction {
   margin-top: 10px;
   border: 1px solid #ffcb47;
