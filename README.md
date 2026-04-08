@@ -1,11 +1,10 @@
 # 1-click Navan refund chrome extension 
 <img width="369" height="284" alt="SCR-20260408-nuzi" src="https://github.com/user-attachments/assets/81313f27-9692-4b20-9f6f-3a59ebc15a6c" />
 
-# Setup 
-## Chrome extension store 
-Install the extension directly [here](https://chromewebstore.google.com/detail/gconbfpfejnhhmjmbjdkpmimooibpiio?utm_source=item-share-cb). It will automatically update for you. 
+# Install from chrome extension store 
+[Install link](https://chromewebstore.google.com/detail/gconbfpfejnhhmjmbjdkpmimooibpiio?utm_source=item-share-cb). 
 
-## Specific versions you want
+**Alternatively, you can download any specific version**
 1. Download **quick-refund-main.zip** from release page [here](https://github.com/EvHanHan/quick-refund/releases/).
 2. Unzip it 
 3. Go to your chrome extension page and enable developer mode.
