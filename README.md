@@ -1,8 +1,12 @@
 # 1-click Navan refund chrome extension 
-<img width="413" height="322" alt="SCR-20260316-qjio" src="https://github.com/user-attachments/assets/4cb77d07-ae3c-4ae9-9202-7d52f30b33e4" />
+<img width="369" height="284" alt="SCR-20260408-nuzi" src="https://github.com/user-attachments/assets/81313f27-9692-4b20-9f6f-3a59ebc15a6c" />
 
 # Setup 
-1. Download **quick-refund-main.zip** from lastest release [here](https://github.com/EvHanHan/quick-refund/releases/).
+## Chrome extension store 
+Install the extension directly [here](https://chromewebstore.google.com/detail/gconbfpfejnhhmjmbjdkpmimooibpiio?utm_source=item-share-cb). It will automatically update for you. 
+
+## Specific versions you want
+1. Download **quick-refund-main.zip** from release page [here](https://github.com/EvHanHan/quick-refund/releases/).
 2. Unzip it 
 3. Go to your chrome extension page and enable developer mode.
 4. Click on the "Load unpacked" button and choose the unziped folder
@@ -10,7 +14,7 @@
 
 
 # How to use? 
-[Video demo](https://youtu.be/dusQxY_aq6s/).
+[Video demo](https://youtu.be/UmcdQT08U1k)
 
 1. Open the extension
 2. Choose your provider and billing type, then click **Start Flow**.
