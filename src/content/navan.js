@@ -578,11 +578,27 @@ async function waitForCustomDescriptionInput(timeoutMs) {
     if (input) return input;
     await wait(300);
   }
+  reportNavanDebugEvent("description_input_lookup", `not_found selectors=${getDescriptionInputSelectorsSummary()}`);
   return null;
 }
 
 function findCustomDescriptionInput() {
-  return querySelectorDeep("[data-testid='custom-field-customField3'] input");
+  const selectors = [
+    "[data-testid='description'] textarea",
+    "user-description-form [data-testid='description'] textarea",
+    "user-description-form textarea",
+    "[data-testid='custom-field-customField3'] input"
+  ];
+  return queryAny(selectors, { allowHidden: true }) || null;
+}
+
+function getDescriptionInputSelectorsSummary() {
+  return [
+    "[data-testid='description'] textarea",
+    "user-description-form [data-testid='description'] textarea",
+    "user-description-form textarea",
+    "[data-testid='custom-field-customField3'] input"
+  ].join("|");
 }
 
 function findCommuterPassOptionInput() {
