@@ -145,7 +145,7 @@ async function uploadDocument(documentPayload) {
   }
 
   await wait(3_000);
-  const createFlow = await waitForCreateSingleTransactionFlow(20_000);
+  const createFlow = await waitForCreateSingleTransactionClick(20_000);
   if (!createFlow.ok) {
     return {
       uploaded: false,
@@ -166,9 +166,6 @@ async function uploadDocument(documentPayload) {
   let commuterPassDebug = null;
 
   if (NAVAN_UPLOAD_AUTOFILL_ENABLED) {
-    if (createFlow.debug?.modalCleared === true) {
-      await wait(3_000);
-    }
     descriptionPrefilled = await waitForDescriptionPrefill(3_000);
     if (descriptionPrefilled) {
       setDescriptionFixed("monthly invoice");
@@ -883,16 +880,13 @@ async function waitAndClickCreateSingleTransaction(timeoutMs) {
   return false;
 }
 
-async function waitForCreateSingleTransactionFlow(timeoutMs) {
+async function waitForCreateSingleTransactionClick(timeoutMs) {
   if (isNavanTransactionFormReady()) {
-    const modalWait = await waitForCreatingTransactionModalToClear(Math.min(8_000, timeoutMs));
     return {
       ok: true,
       clicked: false,
       debug: {
-        alreadyOnForm: true,
-        modalCleared: modalWait.cleared,
-        dismissNudgeCount: modalWait.dismissNudgeCount
+        alreadyOnForm: true
       }
     };
   }
@@ -904,25 +898,16 @@ async function waitForCreateSingleTransactionFlow(timeoutMs) {
       clicked: false,
       debug: {
         alreadyOnForm: false,
-        formReady: isNavanTransactionFormReady(),
-        modalVisible: isCreatingTransactionModalVisible()
+        formReady: isNavanTransactionFormReady()
       }
     };
   }
 
-  const formReady = await waitForTransactionFormReady(timeoutMs);
-  const modalWait = formReady
-    ? await waitForCreatingTransactionModalToClear(Math.min(15_000, timeoutMs))
-    : { cleared: false, dismissNudgeCount: 0 };
   return {
-    ok: formReady,
+    ok: true,
     clicked: true,
     debug: {
-      alreadyOnForm: false,
-      formReady,
-      modalCleared: modalWait.cleared,
-      modalStillVisible: formReady && !modalWait.cleared,
-      dismissNudgeCount: modalWait.dismissNudgeCount
+      alreadyOnForm: false
     }
   };
 }

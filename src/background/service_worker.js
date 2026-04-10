@@ -1076,17 +1076,6 @@ async function runStep(state) {
           FlowStatus.STARTED,
           `Navan upload result (uploaded=${Boolean(uploadResult?.uploaded)} manual=${Boolean(uploadResult?.manualUploadRequired)} reason=${uploadResult?.reason || "none"} file=${uploadResult?.attachedFileName || "none"} modalCleared=${uploadResult?.debug?.modalCleared === undefined ? "n/a" : Boolean(uploadResult?.debug?.modalCleared)} modalStillVisible=${uploadResult?.debug?.modalStillVisible === undefined ? "n/a" : Boolean(uploadResult?.debug?.modalStillVisible)} nudges=${Number(uploadResult?.debug?.dismissNudgeCount || 0)} expenseSelected=${Boolean(uploadResult?.expenseTypeSelected)} expTypedOnly=${uploadResult?.debug?.expenseTypeDebug?.typedOnly === undefined ? "n/a" : Boolean(uploadResult?.debug?.expenseTypeDebug?.typedOnly)} expManualOption=${uploadResult?.debug?.expenseTypeDebug?.manualOptionClickRequired === undefined ? "n/a" : Boolean(uploadResult?.debug?.expenseTypeDebug?.manualOptionClickRequired)} expFinal=${uploadResult?.debug?.expenseTypeDebug?.finalValue || "none"})`
         );
-        const modalStillVisible = Boolean(uploadResult?.debug?.modalStillVisible);
-        if (modalStillVisible) {
-          flowContext.waitingForUser = true;
-          flowContext.waitingReason = "NAVAN_MODAL_STUCK";
-          emitEvent(
-            FlowState.UPLOAD_DOCUMENT,
-            FlowStatus.WAITING_USER,
-            "Navan is still showing the processing modal. Dismiss it in Navan, then click Resume."
-          );
-          return;
-        }
         if (uploadResult?.manualUploadRequired) {
           flowContext.waitingForUser = true;
           flowContext.waitingReason = "NAVAN_MANUAL_UPLOAD";
