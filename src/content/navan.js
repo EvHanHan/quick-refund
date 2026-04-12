@@ -146,7 +146,12 @@ async function uploadDocument(documentPayload) {
 
   await wait(3_000);
   const createFlow = await waitForCreateSingleTransactionClick(20_000);
+  reportNavanDebugEvent(
+    "create_single_transaction_step",
+    `ok=${Boolean(createFlow?.ok)} clicked=${Boolean(createFlow?.clicked)} immediate_handoff=true`
+  );
   if (!createFlow.ok) {
+    reportNavanDebugEvent("create_single_transaction_step_stop", "button_not_found_manual_upload_required=true");
     return {
       uploaded: false,
       manualUploadRequired: true,
@@ -871,7 +876,12 @@ async function waitAndClickCreateSingleTransaction(timeoutMs) {
   while (Date.now() - start < timeoutMs) {
     const button = findCreateSingleTransactionButton();
     if (button && isVisible(button)) {
-      realClick(button);
+      // Use a single native click to match manual behavior and avoid duplicate modal transitions.
+      if (typeof button.click === "function") {
+        button.click();
+      } else {
+        realClick(button);
+      }
       await wait(250);
       return true;
     }
@@ -882,6 +892,7 @@ async function waitAndClickCreateSingleTransaction(timeoutMs) {
 
 async function waitForCreateSingleTransactionClick(timeoutMs) {
   if (isNavanTransactionFormReady()) {
+    reportNavanDebugEvent("create_single_transaction_skip", "already_on_form=true immediate_handoff=true");
     return {
       ok: true,
       clicked: false,
@@ -893,6 +904,7 @@ async function waitForCreateSingleTransactionClick(timeoutMs) {
 
   const clicked = await waitAndClickCreateSingleTransaction(Math.min(8_000, timeoutMs));
   if (!clicked) {
+    reportNavanDebugEvent("create_single_transaction_click", "clicked=false immediate_handoff=true");
     return {
       ok: false,
       clicked: false,
@@ -903,6 +915,7 @@ async function waitForCreateSingleTransactionClick(timeoutMs) {
     };
   }
 
+  reportNavanDebugEvent("create_single_transaction_click", "clicked=true immediate_handoff=true");
   return {
     ok: true,
     clicked: true,
