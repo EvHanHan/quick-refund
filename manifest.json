@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "1-click navan refund",
   "description": "1-click invoice download and Navan expense submission.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "permissions": ["storage", "scripting", "tabs", "activeTab", "alarms", "notifications", "debugger"],
   "host_permissions": [
     "https://www.orange.com/*",
