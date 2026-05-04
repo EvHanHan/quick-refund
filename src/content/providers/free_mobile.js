@@ -74,6 +74,10 @@
       const freeMobileName = deriveFreeMobilePdfFileName(options.url);
       if (freeMobileName) return freeMobileName;
       return "facture_free_mobile.pdf";
+    },
+
+    buildNavanHints() {
+      return { expenseType: "Work from home" };
     }
   });
 

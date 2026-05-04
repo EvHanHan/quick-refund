@@ -122,6 +122,14 @@
         if (fromUrl && fromUrl.includes(".")) return fromUrl;
         if (String(options.contentType || "").includes("html")) return "orange-bill.html";
         return "orange-bill.pdf";
+      },
+
+      buildNavanHints(_ctx, options) {
+        const accountType = String(options?.accountType || "").trim();
+        if (accountType === "mobile_internet") {
+          return { expenseType: "Work from home" };
+        }
+        return { expenseType: "Work from home" };
       }
     };
   }

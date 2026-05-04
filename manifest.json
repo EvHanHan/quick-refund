@@ -60,6 +60,7 @@
         "src/content/providers/generic.js",
         "src/content/providers/bouygues.js",
         "src/content/providers/orange_family.js",
+        "src/content/providers/sfr.js",
         "src/content/providers/redbysfr.js",
         "src/content/providers/free.js",
         "src/content/providers/free_mobile.js",

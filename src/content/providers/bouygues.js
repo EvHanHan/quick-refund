@@ -324,8 +324,12 @@
       return false;
     },
 
-    buildNavanHints() {
-      return undefined;
+    buildNavanHints(_ctx, options) {
+      const accountType = String(options?.accountType || "").trim();
+      if (accountType === "mobile_internet") {
+        return { expenseType: "Work from home" };
+      }
+      return { expenseType: "Work from home" };
     }
   });
 })(typeof window !== "undefined" ? window : globalThis);

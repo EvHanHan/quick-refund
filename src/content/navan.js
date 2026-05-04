@@ -311,6 +311,13 @@ function scheduleAutoFillOnForm() {
   if (!isNavanTransactionFormPage()) {
     return;
   }
+  if (!hasRouteWatcherAutofillHint()) {
+    markAutofillConsumedForCurrentForm();
+    return;
+  }
+  if (isAutofillConsumedForCurrentForm()) {
+    return;
+  }
   if (window.__NAVAN_AUTOFILL_RUNNING || window.__NAVAN_AUTOFILL_DONE) {
     return;
   }
@@ -345,6 +352,7 @@ function scheduleAutoFillOnForm() {
     if (ready) {
       window.__NAVAN_AUTOFILL_DONE = true;
       window.__NAVAN_AUTOFILL_RUNNING = false;
+      markAutofillConsumedForCurrentForm();
       return;
     }
     if (Date.now() - start < maxWaitMs) {
@@ -383,7 +391,7 @@ function setupNavanRouteWatcher() {
     if (window.__NAVAN_LAST_PATH === location.pathname) return;
     window.__NAVAN_LAST_PATH = location.pathname;
     if (isNavanTransactionFormPage()) {
-      window.__NAVAN_AUTOFILL_DONE = false;
+      window.__NAVAN_AUTOFILL_DONE = isAutofillConsumedForCurrentForm();
       window.__NAVAN_AUTOFILL_RUNNING = false;
       scheduleAutoFillOnForm();
     }
@@ -409,11 +417,32 @@ function setupNavanDomWatcher() {
   if (window.__NAVAN_DOM_WATCHER) return;
   window.__NAVAN_DOM_WATCHER = true;
   const observer = new MutationObserver(() => {
-    if (isNavanTransactionFormPage() && !window.__NAVAN_AUTOFILL_DONE) {
+    if (isNavanTransactionFormPage() && !window.__NAVAN_AUTOFILL_DONE && !isAutofillConsumedForCurrentForm()) {
       scheduleAutoFillOnForm();
     }
   });
   observer.observe(document.documentElement, { childList: true, subtree: true });
+}
+
+function getCurrentFormAutofillKey() {
+  return `${location.pathname}${location.search}`;
+}
+
+function getAutofillConsumedKeys() {
+  if (!window.__NAVAN_AUTOFILL_CONSUMED_KEYS) {
+    window.__NAVAN_AUTOFILL_CONSUMED_KEYS = {};
+  }
+  return window.__NAVAN_AUTOFILL_CONSUMED_KEYS;
+}
+
+function isAutofillConsumedForCurrentForm() {
+  const key = getCurrentFormAutofillKey();
+  return Boolean(getAutofillConsumedKeys()[key]);
+}
+
+function markAutofillConsumedForCurrentForm() {
+  const key = getCurrentFormAutofillKey();
+  getAutofillConsumedKeys()[key] = true;
 }
 
 async function tryAutoFillExpenseThenDescription() {
@@ -469,15 +498,15 @@ async function ensureExpenseTypeSelected(expenseTypeLabel) {
   const input = findExpenseTypeInput();
   if (!input) return false;
 
-  const targetLabel = String(expenseTypeLabel || "").trim() || "work from home";
+  const targetLabel = String(expenseTypeLabel || "").trim();
+  if (!targetLabel) return false;
   // Always confirm by selecting an option from the dropdown so dependent custom fields are fully initialized.
   const selectedResult = await selectExpenseTypeByTypingAndFirstOptionWithDebug(targetLabel, 4_000);
   if (selectedResult?.selected) return true;
 
   const current = normalizeComparableText(input.value || "");
   const normalizedTarget = normalizeComparableText(targetLabel);
-  if ((normalizedTarget && current.includes(normalizedTarget))
-    || (normalizedTarget.includes("work from home") && current.includes("teletravail"))) {
+  if (normalizedTarget && current.includes(normalizedTarget)) {
     return true;
   }
 
@@ -488,7 +517,7 @@ async function ensureExpenseTypeSelected(expenseTypeLabel) {
 
 function resolveRouteWatcherExpenseTypeLabel() {
   const hint = String(window.__NAVAN_EXPENSE_TYPE_HINT || "").trim();
-  return hint || "work from home";
+  return hint;
 }
 
 function resolveRouteWatcherCommuterPassOptionQuery() {
@@ -1056,7 +1085,10 @@ async function finalizeExpenseTypeSelection(expenseTypeHint) {
   await waitForExpenseTypeSectionReady(5_000);
   clickDraftTag();
   await wait(250);
-  const desiredType = String(expenseTypeHint || "work from home").trim() || "work from home";
+  const desiredType = String(expenseTypeHint || "").trim();
+  if (!desiredType) {
+    return { selected: false, debug: { reason: "missing_expense_type_hint" } };
+  }
   const typedResult = await typeExpenseTypeOnlyWithDebug(desiredType);
   return {
     selected: false,
@@ -1255,12 +1287,16 @@ function findExpenseTypeInput() {
 
 function findExpenseTypeOption(looseTarget) {
   const candidates = getExpenseTypeOptionCandidates();
+  const normalizedTarget = normalizeComparableText(looseTarget);
+  if (!normalizedTarget) return null;
   return candidates.find((node) => {
     const text = normalizeComparableText(node.textContent);
-    if (text.includes(looseTarget)) return true;
-    // English/French fallback.
-    return text.includes("work from home") || text.includes("work frol home") || text.includes("teletravail");
+    return text.includes(normalizedTarget);
   }) || null;
+}
+
+function hasRouteWatcherAutofillHint() {
+  return Boolean(String(window.__NAVAN_EXPENSE_TYPE_HINT || "").trim());
 }
 
 async function waitForFirstExpenseTypeOption(timeoutMs) {

@@ -56,6 +56,10 @@
 
     shouldForceDownload(_ctx, details) {
       return Boolean(details.href);
+    },
+
+    buildNavanHints() {
+      return { expenseType: "Work from home" };
     }
   });
 

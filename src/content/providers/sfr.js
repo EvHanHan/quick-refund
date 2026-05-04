@@ -1,20 +1,19 @@
 /* global window */
-(function registerRedBySfrStrategy(root) {
+(function registerSfrStrategy(root) {
   const registry = root.__EXT_PROVIDER_STRATEGIES__;
   if (!registry) return;
 
-  registry.register("redbysfr_provider", {
+  registry.register("sfr_provider", {
     isAuthenticated(ctx) {
-      const loginSelectors = ctx.getProviderLoginSelectors("redbysfr_provider");
+      const loginSelectors = ctx.getProviderLoginSelectors("sfr_provider");
       const hasLoginField = Boolean(ctx.queryWithin(ctx.document, loginSelectors.username) || ctx.queryWithin(ctx.document, loginSelectors.password));
       return !hasLoginField;
     },
 
     checkBillingReady(ctx) {
       const text = ctx.normalizeText(ctx.document.body?.textContent || "");
-      const factureHeading = ctx.findByText("vos factures") || ctx.findByText("facture fixe");
       return {
-        ready: Boolean(factureHeading) || text.includes("vos factures") || text.includes("facture fixe") || this.isAuthenticated(ctx)
+        ready: text.includes("facture") || text.includes("conso") || this.isAuthenticated(ctx)
       };
     },
 
@@ -30,7 +29,7 @@
     },
 
     async getDownloadPlan(ctx, options) {
-      const billing = options.billing || ctx.getProviderBillingSelectors("redbysfr_provider");
+      const billing = options.billing || ctx.getProviderBillingSelectors("sfr_provider");
       const downloadControlStart = Date.now();
       const downloadControl = await ctx.waitForVisible(billing.downloadButton, 12000);
       if (!downloadControl) {
@@ -38,13 +37,13 @@
       }
       const downloadControlMs = Date.now() - downloadControlStart;
       let didClickControl = false;
-      let href = ctx.resolveDownloadUrl(downloadControl, options.beforeResources, "redbysfr_provider");
+      let href = ctx.resolveDownloadUrl(downloadControl, options.beforeResources, "sfr_provider");
       let downloadUrlMs = null;
       if (!href) {
         ctx.realClick(downloadControl);
         didClickControl = true;
         const downloadUrlStart = Date.now();
-        href = await ctx.waitForDownloadUrl(downloadControl, options.beforeResources, "redbysfr_provider", 8000);
+        href = await ctx.waitForDownloadUrl(downloadControl, options.beforeResources, "sfr_provider", 8000);
         downloadUrlMs = Date.now() - downloadUrlStart;
       }
       return { downloadControl, didClickControl, href, downloadControlMs, downloadUrlMs };
@@ -56,7 +55,7 @@
       const url = String(options.url || "");
       const fromUrl = url.split("?")[0].split("/").pop();
       if (fromUrl && fromUrl.includes(".")) return fromUrl;
-      return "red-bill.pdf";
+      return "sfr-bill.pdf";
     },
 
     buildNavanHints(_ctx, options) {
