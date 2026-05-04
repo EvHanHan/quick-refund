@@ -4,6 +4,63 @@
   if (!registry) return;
 
   registry.register("redbysfr_provider", {
+    hasInvoiceContentVisible(ctx, billing) {
+      const heading = ctx.findByText("vos factures") || ctx.findByText("facture fixe");
+      if (heading) return true;
+      const downloadSelectors = billing?.downloadButton || [];
+      const invoiceSelectors = billing?.invoiceLinks || [];
+      return Boolean(ctx.queryWithin(ctx.document, [...downloadSelectors, ...invoiceSelectors]));
+    },
+
+    isConsoTabActive(ctx) {
+      const tabNodes = Array.from(ctx.document.querySelectorAll("button[role='tab'],a[role='tab'],[role='tab']"));
+      for (const node of tabNodes) {
+        const text = ctx.normalizeText(node.textContent || "");
+        const selected = String(node.getAttribute("aria-selected") || "").toLowerCase() === "true";
+        const active = node.classList.contains("active") || node.classList.contains("selected");
+        if ((selected || active) && text.includes("conso en cours")) {
+          return true;
+        }
+      }
+      return false;
+    },
+
+    findFacturesTab(ctx) {
+      const tabNodes = Array.from(ctx.document.querySelectorAll("button,a,[role='tab']"));
+      const candidates = tabNodes.filter((node) => {
+        const text = ctx.normalizeText(node.textContent || "");
+        return text.includes("factures") || text === "facture" || text.includes("mes factures");
+      });
+      const semanticCandidate = candidates.find((node) => {
+        const role = String(node.getAttribute("role") || "").toLowerCase();
+        const controls = ctx.normalizeText(node.getAttribute("aria-controls") || "");
+        const labelledBy = ctx.normalizeText(node.getAttribute("aria-labelledby") || "");
+        return role === "tab" || controls.includes("facture") || labelledBy.includes("facture");
+      });
+      return semanticCandidate || candidates[0] || null;
+    },
+
+    async ensureFacturesTabVisible(ctx, billing) {
+      if (this.hasInvoiceContentVisible(ctx, billing)) return;
+      const timeoutMs = 7000;
+      const start = Date.now();
+      while (Date.now() - start < timeoutMs) {
+        if (this.hasInvoiceContentVisible(ctx, billing)) return;
+        const facturesTab = this.findFacturesTab(ctx);
+        if (facturesTab) {
+          ctx.realClick(facturesTab);
+          await ctx.wait(350);
+          continue;
+        }
+        if (!this.isConsoTabActive(ctx)) {
+          await ctx.wait(250);
+          continue;
+        }
+        await ctx.wait(250);
+      }
+      throw new Error("Could not switch RED by SFR page from 'Conso en cours' to 'Factures'");
+    },
+
     isAuthenticated(ctx) {
       const loginSelectors = ctx.getProviderLoginSelectors("redbysfr_provider");
       const hasLoginField = Boolean(ctx.queryWithin(ctx.document, loginSelectors.username) || ctx.queryWithin(ctx.document, loginSelectors.password));
@@ -31,6 +88,7 @@
 
     async getDownloadPlan(ctx, options) {
       const billing = options.billing || ctx.getProviderBillingSelectors("redbysfr_provider");
+      await this.ensureFacturesTabVisible(ctx, billing);
       const downloadControlStart = Date.now();
       const downloadControl = await ctx.waitForVisible(billing.downloadButton, 12000);
       if (!downloadControl) {
